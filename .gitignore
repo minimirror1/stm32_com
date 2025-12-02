@@ -1,0 +1,50 @@
+# STM32CubeIDE / Eclipse
+Debug/
+Release/
+build/
+.settings/
+.classpath
+# .project
+# .cproject
+# .mxproject
+*.launch
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+*.elf
+*.bin
+*.hex
+*.map
+
+# Editor specific
+.vscode/
+.idea/
+*.swp
+*~
+
