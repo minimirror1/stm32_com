@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "uart_queue.h"
+#include "json_com.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -103,6 +104,7 @@ int main(void)
   MX_USB_PCD_Init();
   /* USER CODE BEGIN 2 */
   UART_Queue_Init(&huart1);
+  JSON_COM_Init();
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -112,11 +114,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    // Loopback test
-    uint8_t rxData;
-    if (UART_ReadByte(&rxData) == 0) {
-      UART_SendByte(rxData);
-    }
+    JSON_COM_Process();
   }
   /* USER CODE END 3 */
 }
