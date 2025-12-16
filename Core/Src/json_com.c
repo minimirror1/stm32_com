@@ -12,58 +12,54 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-#define MAX_JSON_LEN 1024
-
-static char rx_line_buffer[MAX_JSON_LEN];
-static uint16_t rx_index = 0;
-
-void JSON_COM_Init(void) {
-    rx_index = 0;
+void JSON_COM_Init(JSON_Context *ctx, UART_Context *uart) {
+    ctx->uart = uart;
+    ctx->rx_index = 0;
 }
 
-static void SendResponse(cJSON *response_json) {
+static void SendResponse(JSON_Context *ctx, cJSON *response_json) {
     char *str = cJSON_PrintUnformatted(response_json);
     if (str) {
-        UART_SendString(str);
-        UART_SendString("\n"); // Protocol expects newline
+        UART_SendString(ctx->uart, str);
+        UART_SendString(ctx->uart, "\n"); // Protocol expects newline
         free(str); // cJSON uses malloc
     }
     cJSON_Delete(response_json);
 }
 
-static void SendError(const char *msg) {
+static void SendError(JSON_Context *ctx, const char *msg) {
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "status", "error");
     cJSON_AddStringToObject(root, "message", msg);
-    SendResponse(root);
+    SendResponse(ctx, root);
 }
 
-static void SendSuccess(cJSON *payload) {
+static void SendSuccess(JSON_Context *ctx, cJSON *payload) {
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "status", "ok");
     if (payload) {
         cJSON_AddItemToObject(root, "payload", payload);
     }
-    SendResponse(root);
+    SendResponse(ctx, root);
 }
 
 // --- Command Handlers ---
 
-static void HandlePing(void) {
+static void HandlePing(JSON_Context *ctx) {
     cJSON *payload = cJSON_CreateObject();
     cJSON_AddStringToObject(payload, "message", "pong");
-    SendSuccess(payload);
+    SendSuccess(ctx, payload);
 }
 
-static void HandleMove(int deviceId, cJSON *req_payload) {
+static void HandleMove(JSON_Context *ctx, int deviceId, cJSON *req_payload) {
     // Mock move
     cJSON *payload = cJSON_CreateObject();
     cJSON_AddStringToObject(payload, "status", "moved");
     cJSON_AddNumberToObject(payload, "deviceId", deviceId);
-    SendSuccess(payload);
+    SendSuccess(ctx, payload);
 }
 
-static void HandleMotionCtrl(int deviceId, cJSON *req_payload) {
+static void HandleMotionCtrl(JSON_Context *ctx, int deviceId, cJSON *req_payload) {
     cJSON *action_item = cJSON_GetObjectItem(req_payload, "action");
     char *action = action_item ? action_item->valuestring : "unknown";
 
@@ -71,10 +67,10 @@ static void HandleMotionCtrl(int deviceId, cJSON *req_payload) {
     cJSON_AddStringToObject(payload, "status", "executed");
     cJSON_AddStringToObject(payload, "action", action);
     cJSON_AddNumberToObject(payload, "deviceId", deviceId);
-    SendSuccess(payload);
+    SendSuccess(ctx, payload);
 }
 
-static void HandleGetFiles(int deviceId) {
+static void HandleGetFiles(JSON_Context *ctx, int deviceId) {
     // Mock file system
     cJSON *rootItems = cJSON_CreateArray();
     
@@ -86,10 +82,10 @@ static void HandleGetFiles(int deviceId) {
     cJSON_AddNumberToObject(file1, "Size", 123);
     cJSON_AddItemToArray(rootItems, file1);
 
-    SendSuccess(rootItems);
+    SendSuccess(ctx, rootItems);
 }
 
-static void HandleGetFile(int deviceId, cJSON *req_payload) {
+static void HandleGetFile(JSON_Context *ctx, int deviceId, cJSON *req_payload) {
     cJSON *path_item = cJSON_GetObjectItem(req_payload, "path");
     char *path = path_item ? path_item->valuestring : "";
 
@@ -97,29 +93,29 @@ static void HandleGetFile(int deviceId, cJSON *req_payload) {
     cJSON *payload = cJSON_CreateObject();
     cJSON_AddStringToObject(payload, "path", path);
     cJSON_AddStringToObject(payload, "content", "Mock content for file");
-    SendSuccess(payload);
+    SendSuccess(ctx, payload);
 }
 
-static void HandleSaveFile(int deviceId, cJSON *req_payload) {
+static void HandleSaveFile(JSON_Context *ctx, int deviceId, cJSON *req_payload) {
     cJSON *path_item = cJSON_GetObjectItem(req_payload, "path");
     
     cJSON *payload = cJSON_CreateObject();
     cJSON_AddStringToObject(payload, "status", "saved");
     if (path_item) cJSON_AddStringToObject(payload, "path", path_item->valuestring);
-    SendSuccess(payload);
+    SendSuccess(ctx, payload);
 }
 
-static void HandleVerifyFile(int deviceId, cJSON *req_payload) {
+static void HandleVerifyFile(JSON_Context *ctx, int deviceId, cJSON *req_payload) {
     cJSON *payload = cJSON_CreateObject();
     cJSON_AddBoolToObject(payload, "match", cJSON_True); // Always match for now
-    SendSuccess(payload);
+    SendSuccess(ctx, payload);
 }
 
 
-static void HandleProcessPacket(const char *json_str) {
+static void HandleProcessPacket(JSON_Context *ctx, const char *json_str) {
     cJSON *root = cJSON_Parse(json_str);
     if (!root) {
-        SendError("Invalid JSON");
+        SendError(ctx, "Invalid JSON");
         return;
     }
 
@@ -128,7 +124,7 @@ static void HandleProcessPacket(const char *json_str) {
     cJSON *payload_item = cJSON_GetObjectItem(root, "payload");
 
     if (!cJSON_IsString(cmd_item)) {
-        SendError("Missing or invalid cmd");
+        SendError(ctx, "Missing or invalid cmd");
         cJSON_Delete(root);
         return;
     }
@@ -141,40 +137,38 @@ static void HandleProcessPacket(const char *json_str) {
 
     char *cmd = cmd_item->valuestring;
 
-    if (strcmp(cmd, "ping") == 0) HandlePing();
-    else if (strcmp(cmd, "move") == 0) HandleMove(deviceId, payload_item);
-    else if (strcmp(cmd, "motion_ctrl") == 0) HandleMotionCtrl(deviceId, payload_item);
-    else if (strcmp(cmd, "get_files") == 0) HandleGetFiles(deviceId);
-    else if (strcmp(cmd, "get_file") == 0) HandleGetFile(deviceId, payload_item);
-    else if (strcmp(cmd, "save_file") == 0) HandleSaveFile(deviceId, payload_item);
-    else if (strcmp(cmd, "verify_file") == 0) HandleVerifyFile(deviceId, payload_item);
+    if (strcmp(cmd, "ping") == 0) HandlePing(ctx);
+    else if (strcmp(cmd, "move") == 0) HandleMove(ctx, deviceId, payload_item);
+    else if (strcmp(cmd, "motion_ctrl") == 0) HandleMotionCtrl(ctx, deviceId, payload_item);
+    else if (strcmp(cmd, "get_files") == 0) HandleGetFiles(ctx, deviceId);
+    else if (strcmp(cmd, "get_file") == 0) HandleGetFile(ctx, deviceId, payload_item);
+    else if (strcmp(cmd, "save_file") == 0) HandleSaveFile(ctx, deviceId, payload_item);
+    else if (strcmp(cmd, "verify_file") == 0) HandleVerifyFile(ctx, deviceId, payload_item);
     else {
-        SendError("Unknown command");
+        SendError(ctx, "Unknown command");
     }
 
     cJSON_Delete(root);
 }
 
-void JSON_COM_Process(void) {
+void JSON_COM_Process(JSON_Context *ctx) {
     uint8_t byte;
     // Process all available bytes
-    while (UART_ReadByte(&byte) == 0) {
+    while (UART_ReadByte(ctx->uart, &byte) == 0) {
         if (byte == '\n' || byte == '\r') {
-            if (rx_index > 0) {
-                rx_line_buffer[rx_index] = '\0';
-                HandleProcessPacket(rx_line_buffer);
-                rx_index = 0;
+            if (ctx->rx_index > 0) {
+                ctx->rx_line_buffer[ctx->rx_index] = '\0';
+                HandleProcessPacket(ctx, ctx->rx_line_buffer);
+                ctx->rx_index = 0;
             }
         } else {
-            if (rx_index < MAX_JSON_LEN - 1) {
-                rx_line_buffer[rx_index++] = (char)byte;
+            if (ctx->rx_index < MAX_JSON_LEN - 1) {
+                ctx->rx_line_buffer[ctx->rx_index++] = (char)byte;
             } else {
                 // Buffer overflow, reset
-                rx_index = 0; 
-                SendError("Buffer overflow");
+                ctx->rx_index = 0; 
+                SendError(ctx, "Buffer overflow");
             }
         }
     }
 }
-
-

@@ -8,68 +8,101 @@
 #include "uart_queue.h"
 #include <string.h>
 
-static UART_HandleTypeDef *q_huart;
+#define MAX_UARTS 4
+static UART_Context *uart_registry[MAX_UARTS] = {NULL};
 
-static RingBuffer tx_buffer;
-static RingBuffer rx_buffer;
+static void RegisterContext(UART_Context *ctx) {
+    for (int i = 0; i < MAX_UARTS; i++) {
+        if (uart_registry[i] == NULL) {
+            uart_registry[i] = ctx;
+            return;
+        }
+    }
+}
 
-static volatile uint8_t tx_busy = 0;
-static uint8_t rx_byte_tmp;
+static UART_Context* GetContext(UART_HandleTypeDef *huart) {
+    for (int i = 0; i < MAX_UARTS; i++) {
+        if (uart_registry[i] != NULL && uart_registry[i]->huart == huart) {
+            return uart_registry[i];
+        }
+    }
+    return NULL;
+}
 
-void UART_Queue_Init(UART_HandleTypeDef *huart) {
-    q_huart = huart;
+void UART_Queue_Init(UART_Context *ctx, UART_HandleTypeDef *huart) {
+    ctx->huart = huart;
 
     // Initialize indices
-    tx_buffer.head = 0;
-    tx_buffer.tail = 0;
-    rx_buffer.head = 0;
-    rx_buffer.tail = 0;
+    ctx->tx_buffer.head = 0;
+    ctx->tx_buffer.tail = 0;
+    ctx->rx_buffer.head = 0;
+    ctx->rx_buffer.tail = 0;
 
-    tx_busy = 0;
+    ctx->tx_busy = 0;
+    ctx->enable_led = false;
+
+    RegisterContext(ctx);
 
     // Start Reception
-    HAL_UART_Receive_IT(q_huart, &rx_byte_tmp, 1);
+    HAL_UART_Receive_IT(ctx->huart, &ctx->rx_byte_tmp, 1);
+}
+
+void UART_ConfigLED(UART_Context *ctx, GPIO_TypeDef* tx_port, uint16_t tx_pin, GPIO_TypeDef* rx_port, uint16_t rx_pin) {
+    ctx->enable_led = true;
+    ctx->tx_led_port = tx_port;
+    ctx->tx_led_pin = tx_pin;
+    ctx->rx_led_port = rx_port;
+    ctx->rx_led_pin = rx_pin;
 }
 
 // --- TX Functions ---
 
-int UART_SendByte(uint8_t data) {
-    uint16_t next_head = (tx_buffer.head + 1) % UART_BUFFER_SIZE;
+int UART_SendByte(UART_Context *ctx, uint8_t data) {
+    uint16_t next_head = (ctx->tx_buffer.head + 1) % UART_BUFFER_SIZE;
 
     // Check if buffer is full
-    if (next_head == tx_buffer.tail) {
+    if (next_head == ctx->tx_buffer.tail) {
         return -1; // Buffer Full
     }
 
-    tx_buffer.buffer[tx_buffer.head] = data;
-    tx_buffer.head = next_head;
+    ctx->tx_buffer.buffer[ctx->tx_buffer.head] = data;
+    ctx->tx_buffer.head = next_head;
 
     // Start transmission if idle
-    if (!tx_busy) {
-        tx_busy = 1;
-        uint8_t *pData = &tx_buffer.buffer[tx_buffer.tail];
+    if (!ctx->tx_busy) {
+        ctx->tx_busy = 1;
+        
+        // Turn on TX LED if enabled
+        if (ctx->enable_led) {
+            HAL_GPIO_WritePin(ctx->tx_led_port, ctx->tx_led_pin, GPIO_PIN_SET);
+        }
+
+        uint8_t *pData = &ctx->tx_buffer.buffer[ctx->tx_buffer.tail];
         // Only transmit 1 byte at a time to simplify buffer wrapping logic
         // and let ISR handle the rest
-        if (HAL_UART_Transmit_IT(q_huart, pData, 1) != HAL_OK) {
-             tx_busy = 0;
+        if (HAL_UART_Transmit_IT(ctx->huart, pData, 1) != HAL_OK) {
+             ctx->tx_busy = 0;
+             if (ctx->enable_led) {
+                 HAL_GPIO_WritePin(ctx->tx_led_port, ctx->tx_led_pin, GPIO_PIN_RESET);
+             }
              return -2; // Error starting transmission
         }
     }
     return 0; // Success
 }
 
-int UART_SendArray(uint8_t *data, uint16_t length) {
+int UART_SendArray(UART_Context *ctx, uint8_t *data, uint16_t length) {
     for (uint16_t i = 0; i < length; i++) {
-        if (UART_SendByte(data[i]) != 0) {
+        if (UART_SendByte(ctx, data[i]) != 0) {
             return -1; // Error or Buffer Full
         }
     }
     return 0;
 }
 
-int UART_SendString(char *str) {
+int UART_SendString(UART_Context *ctx, char *str) {
     while (*str) {
-        if (UART_SendByte((uint8_t)*str++) != 0) {
+        if (UART_SendByte(ctx, (uint8_t)*str++) != 0) {
             return -1;
         }
     }
@@ -78,50 +111,60 @@ int UART_SendString(char *str) {
 
 // --- RX Functions ---
 
-int UART_IsRxNotEmpty(void) {
-    return (rx_buffer.head != rx_buffer.tail);
+int UART_IsRxNotEmpty(UART_Context *ctx) {
+    return (ctx->rx_buffer.head != ctx->rx_buffer.tail);
 }
 
-int UART_ReadByte(uint8_t *data) {
-    if (rx_buffer.head == rx_buffer.tail) {
+int UART_ReadByte(UART_Context *ctx, uint8_t *data) {
+    if (ctx->rx_buffer.head == ctx->rx_buffer.tail) {
         return -1; // Buffer Empty
     }
 
-    *data = rx_buffer.buffer[rx_buffer.tail];
-    rx_buffer.tail = (rx_buffer.tail + 1) % UART_BUFFER_SIZE;
+    *data = ctx->rx_buffer.buffer[ctx->rx_buffer.tail];
+    ctx->rx_buffer.tail = (ctx->rx_buffer.tail + 1) % UART_BUFFER_SIZE;
     return 0;
 }
 
 // --- HAL Callbacks ---
 
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
-    if (huart->Instance == q_huart->Instance) {
-        // Advance tail since the previous byte was sent
-        tx_buffer.tail = (tx_buffer.tail + 1) % UART_BUFFER_SIZE;
+    UART_Context *ctx = GetContext(huart);
+    if (ctx == NULL) return;
 
-        if (tx_buffer.tail != tx_buffer.head) {
-            // More data to send
-            uint8_t *pData = &tx_buffer.buffer[tx_buffer.tail];
-            HAL_UART_Transmit_IT(q_huart, pData, 1);
-        } else {
-            // No more data
-            tx_busy = 0;
+    // Advance tail since the previous byte was sent
+    ctx->tx_buffer.tail = (ctx->tx_buffer.tail + 1) % UART_BUFFER_SIZE;
+
+    if (ctx->tx_buffer.tail != ctx->tx_buffer.head) {
+        // More data to send
+        uint8_t *pData = &ctx->tx_buffer.buffer[ctx->tx_buffer.tail];
+        HAL_UART_Transmit_IT(ctx->huart, pData, 1);
+    } else {
+        // No more data
+        ctx->tx_busy = 0;
+        // Turn off TX LED if enabled
+        if (ctx->enable_led) {
+            HAL_GPIO_WritePin(ctx->tx_led_port, ctx->tx_led_pin, GPIO_PIN_RESET);
         }
     }
 }
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
-    if (huart->Instance == q_huart->Instance) {
-        // Store received byte
-        uint16_t next_head = (rx_buffer.head + 1) % UART_BUFFER_SIZE;
-        if (next_head != rx_buffer.tail) {
-            rx_buffer.buffer[rx_buffer.head] = rx_byte_tmp;
-            rx_buffer.head = next_head;
-        }
-        // Else: Buffer overflow, drop byte
+    UART_Context *ctx = GetContext(huart);
+    if (ctx == NULL) return;
 
-        // Restart Reception
-        HAL_UART_Receive_IT(q_huart, &rx_byte_tmp, 1);
+    // Store received byte
+    uint16_t next_head = (ctx->rx_buffer.head + 1) % UART_BUFFER_SIZE;
+    if (next_head != ctx->rx_buffer.tail) {
+        ctx->rx_buffer.buffer[ctx->rx_buffer.head] = ctx->rx_byte_tmp;
+        ctx->rx_buffer.head = next_head;
     }
-}
+    // Else: Buffer overflow, drop byte
 
+    // Toggle RX LED if enabled
+    if (ctx->enable_led) {
+        HAL_GPIO_TogglePin(ctx->rx_led_port, ctx->rx_led_pin);
+    }
+
+    // Restart Reception
+    HAL_UART_Receive_IT(ctx->huart, &ctx->rx_byte_tmp, 1);
+}

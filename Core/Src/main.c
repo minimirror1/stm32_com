@@ -50,7 +50,8 @@ UART_HandleTypeDef huart1;
 PCD_HandleTypeDef hpcd_USB_FS;
 
 /* USER CODE BEGIN PV */
-
+UART_Context uart1_ctx;
+JSON_Context json1_ctx;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -103,8 +104,9 @@ int main(void)
   MX_USART1_UART_Init();
   MX_USB_PCD_Init();
   /* USER CODE BEGIN 2 */
-  UART_Queue_Init(&huart1);
-  JSON_COM_Init();
+  UART_Queue_Init(&uart1_ctx, &huart1);
+  UART_ConfigLED(&uart1_ctx, LD3_GPIO_Port, LD3_Pin, LD4_GPIO_Port, LD4_Pin);
+  JSON_COM_Init(&json1_ctx, &uart1_ctx);
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -114,7 +116,8 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    JSON_COM_Process();
+    JSON_COM_Process(&json1_ctx);
+
   }
   /* USER CODE END 3 */
 }

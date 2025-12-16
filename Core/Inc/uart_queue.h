@@ -9,6 +9,7 @@
 #define INC_UART_QUEUE_H_
 
 #include "main.h"
+#include <stdbool.h>
 
 #define UART_BUFFER_SIZE 256
 
@@ -18,19 +19,33 @@ typedef struct {
 	volatile uint16_t tail;
 } RingBuffer;
 
-void UART_Queue_Init(UART_HandleTypeDef *huart);
+typedef struct {
+    UART_HandleTypeDef *huart;
+    
+    RingBuffer tx_buffer;
+    RingBuffer rx_buffer;
+    
+    volatile uint8_t tx_busy;
+    uint8_t rx_byte_tmp;
+
+    // LED Configuration
+    bool enable_led;
+    GPIO_TypeDef* tx_led_port;
+    uint16_t tx_led_pin;
+    GPIO_TypeDef* rx_led_port;
+    uint16_t rx_led_pin;
+} UART_Context;
+
+void UART_Queue_Init(UART_Context *ctx, UART_HandleTypeDef *huart);
+void UART_ConfigLED(UART_Context *ctx, GPIO_TypeDef* tx_port, uint16_t tx_pin, GPIO_TypeDef* rx_port, uint16_t rx_pin);
 
 // TX Functions
-int UART_SendByte(uint8_t data);
-int UART_SendArray(uint8_t *data, uint16_t length);
-int UART_SendString(char *str);
+int UART_SendByte(UART_Context *ctx, uint8_t data);
+int UART_SendArray(UART_Context *ctx, uint8_t *data, uint16_t length);
+int UART_SendString(UART_Context *ctx, char *str);
 
 // RX Functions
-int UART_IsRxNotEmpty(void);
-int UART_ReadByte(uint8_t *data);
+int UART_IsRxNotEmpty(UART_Context *ctx);
+int UART_ReadByte(UART_Context *ctx, uint8_t *data);
 
 #endif /* INC_UART_QUEUE_H_ */
-
-
-
-
