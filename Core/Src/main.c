@@ -106,7 +106,7 @@ int main(void)
   /* USER CODE BEGIN 2 */
   UART_Queue_Init(&uart1_ctx, &huart1);
   UART_ConfigLED(&uart1_ctx, LD3_GPIO_Port, LD3_Pin, LD4_GPIO_Port, LD4_Pin);
-  JSON_COM_Init(&json1_ctx, &uart1_ctx);
+  JSON_COM_Init(&json1_ctx, &uart1_ctx, DEVICE_ID);
   /* USER CODE END 2 */
 
   /* Infinite loop */

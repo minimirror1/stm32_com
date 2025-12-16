@@ -118,6 +118,15 @@ void Error_Handler(void);
 
 /* USER CODE BEGIN Private defines */
 
+// RS485 multidrop addressing
+// - DEVICE_ID: this node's address (compile-time)
+// - RS485_BROADCAST_ID: broadcast address (no response by default)
+#ifndef DEVICE_ID
+#define DEVICE_ID (1U)
+#endif
+
+#define RS485_BROADCAST_ID (255U)
+
 /* USER CODE END Private defines */
 
 #ifdef __cplusplus
