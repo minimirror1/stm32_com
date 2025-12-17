@@ -11,7 +11,7 @@
 #include "main.h"
 #include <stdbool.h>
 
-#define UART_BUFFER_SIZE 256
+#define UART_BUFFER_SIZE 2048U
 
 typedef struct {
 	uint8_t buffer[UART_BUFFER_SIZE];
