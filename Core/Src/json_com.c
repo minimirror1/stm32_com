@@ -22,8 +22,8 @@ void JSON_COM_Init(JSON_Context *ctx, UART_Context *uart, uint8_t my_id) {
 static void SendResponse(JSON_Context *ctx, cJSON *response_json) {
     char *str = cJSON_PrintUnformatted(response_json);
     if (str) {
-        UART_SendString(ctx->uart, str);
-        UART_SendString(ctx->uart, "\n"); // Protocol expects newline
+        UART_SendStringBlocking(ctx->uart, str);
+        UART_SendStringBlocking(ctx->uart, "\n"); // Protocol expects newline
         free(str); // cJSON uses malloc
     }
     cJSON_Delete(response_json);
@@ -92,18 +92,144 @@ static void HandleMotionCtrl(JSON_Context *ctx, uint8_t req_src_id, cJSON *req_p
 }
 
 static void HandleGetFiles(JSON_Context *ctx, uint8_t req_src_id, bool respond) {
-    // Mock file system
-    cJSON *rootItems = cJSON_CreateArray();
-    
-    // Example file
-    cJSON *file1 = cJSON_CreateObject();
-    cJSON_AddStringToObject(file1, "Name", "test.txt");
-    cJSON_AddStringToObject(file1, "Path", "test.txt");
-    cJSON_AddBoolToObject(file1, "IsDirectory", cJSON_False);
-    cJSON_AddNumberToObject(file1, "Size", 123);
-    cJSON_AddItemToArray(rootItems, file1);
+    // Temporary: respond with a fixed folder/file tree over communication only.
+    // (Later: replace with real SD-card listing.)
+    if (!respond) return;
 
-    SendSuccess(ctx, req_src_id, "get_files", rootItems, respond);
+    static const char payload_json[] =
+        "["
+          "{"
+            "\"Children\":["
+              "{"
+                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"err_lv.ini\",\"Path\":\"Error/err_lv.ini\",\"IsDirectory\":false,\"Size\":20"
+              "},"
+              "{"
+                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"ERR_LVF.TXT\",\"Path\":\"Error/ERR_LVF.TXT\",\"IsDirectory\":false,\"Size\":28"
+              "},"
+              "{"
+                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"note.ini\",\"Path\":\"Error/note.ini\",\"IsDirectory\":false,\"Size\":18"
+              "}"
+            "],"
+            "\"Icon\":\"\\uE8B7\",\"Name\":\"Error\",\"Path\":\"Error\",\"IsDirectory\":true,\"Size\":0"
+          "},"
+          "{"
+            "\"Children\":["
+              "{"
+                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"BOOT.TXT\",\"Path\":\"Log/BOOT.TXT\",\"IsDirectory\":false,\"Size\":11"
+              "},"
+              "{"
+                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"ERROR.TXT\",\"Path\":\"Log/ERROR.TXT\",\"IsDirectory\":false,\"Size\":12"
+              "},"
+              "{"
+                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"INSP.TXT\",\"Path\":\"Log/INSP.TXT\",\"IsDirectory\":false,\"Size\":17"
+              "},"
+              "{"
+                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"SENSOR.TXT\",\"Path\":\"Log/SENSOR.TXT\",\"IsDirectory\":false,\"Size\":13"
+              "}"
+            "],"
+            "\"Icon\":\"\\uE8B7\",\"Name\":\"Log\",\"Path\":\"Log\",\"IsDirectory\":true,\"Size\":0"
+          "},"
+          "{"
+            "\"Children\":["
+              "{"
+                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_2.CSV\",\"Path\":\"Media/MT_2.CSV\",\"IsDirectory\":false,\"Size\":20"
+              "},"
+              "{"
+                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_3.CSV\",\"Path\":\"Media/MT_3.CSV\",\"IsDirectory\":false,\"Size\":20"
+              "},"
+              "{"
+                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_4.CSV\",\"Path\":\"Media/MT_4.CSV\",\"IsDirectory\":false,\"Size\":20"
+              "},"
+              "{"
+                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_5.CSV\",\"Path\":\"Media/MT_5.CSV\",\"IsDirectory\":false,\"Size\":20"
+              "},"
+              "{"
+                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_6.CSV\",\"Path\":\"Media/MT_6.CSV\",\"IsDirectory\":false,\"Size\":20"
+              "},"
+              "{"
+                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_ALL.CSV\",\"Path\":\"Media/MT_ALL.CSV\",\"IsDirectory\":false,\"Size\":20"
+              "}"
+            "],"
+            "\"Icon\":\"\\uE8B7\",\"Name\":\"Media\",\"Path\":\"Media\",\"IsDirectory\":true,\"Size\":0"
+          "},"
+          "{"
+            "\"Children\":["
+              "{"
+                "\"Children\":["
+                  "{"
+                    "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"placeholder.txt\",\"Path\":\"Midi/motor/placeholder.txt\",\"IsDirectory\":false,\"Size\":0"
+                  "}"
+                "],"
+                "\"Icon\":\"\\uE8B7\",\"Name\":\"motor\",\"Path\":\"Midi/motor\",\"IsDirectory\":true,\"Size\":0"
+              "},"
+              "{"
+                "\"Children\":["
+                  "{"
+                    "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"placeholder.txt\",\"Path\":\"Midi/page/placeholder.txt\",\"IsDirectory\":false,\"Size\":0"
+                  "}"
+                "],"
+                "\"Icon\":\"\\uE8B7\",\"Name\":\"page\",\"Path\":\"Midi/page\",\"IsDirectory\":true,\"Size\":0"
+              "}"
+            "],"
+            "\"Icon\":\"\\uE8B7\",\"Name\":\"Midi\",\"Path\":\"Midi\",\"IsDirectory\":true,\"Size\":0"
+          "},"
+          "{"
+            "\"Children\":["
+              "{"
+                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"DI_ID.TXT\",\"Path\":\"Setting/DI_ID.TXT\",\"IsDirectory\":false,\"Size\":10"
+              "},"
+              "{"
+                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_AT.TXT\",\"Path\":\"Setting/MT_AT.TXT\",\"IsDirectory\":false,\"Size\":9"
+              "},"
+              "{"
+                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_ATT.TXT\",\"Path\":\"Setting/MT_ATT.TXT\",\"IsDirectory\":false,\"Size\":9"
+              "},"
+              "{"
+                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_CT.TXT\",\"Path\":\"Setting/MT_CT.TXT\",\"IsDirectory\":false,\"Size\":9"
+              "},"
+              "{"
+                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_EL.TXT\",\"Path\":\"Setting/MT_EL.TXT\",\"IsDirectory\":false,\"Size\":9"
+              "},"
+              "{"
+                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_LI.TXT\",\"Path\":\"Setting/MT_LI.TXT\",\"IsDirectory\":false,\"Size\":9"
+              "},"
+              "{"
+                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_LK.TXT\",\"Path\":\"Setting/MT_LK.TXT\",\"IsDirectory\":false,\"Size\":9"
+              "},"
+              "{"
+                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_MD.TXT\",\"Path\":\"Setting/MT_MD.TXT\",\"IsDirectory\":false,\"Size\":9"
+              "},"
+              "{"
+                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_MS.TXT\",\"Path\":\"Setting/MT_MS.TXT\",\"IsDirectory\":false,\"Size\":9"
+              "},"
+              "{"
+                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_PL.TXT\",\"Path\":\"Setting/MT_PL.TXT\",\"IsDirectory\":false,\"Size\":9"
+              "},"
+              "{"
+                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_RP.TXT\",\"Path\":\"Setting/MT_RP.TXT\",\"IsDirectory\":false,\"Size\":10"
+              "},"
+              "{"
+                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_ST.TXT\",\"Path\":\"Setting/MT_ST.TXT\",\"IsDirectory\":false,\"Size\":10"
+              "},"
+              "{"
+                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"RE_TI.TXT\",\"Path\":\"Setting/RE_TI.TXT\",\"IsDirectory\":false,\"Size\":10"
+              "}"
+            "],"
+            "\"Icon\":\"\\uE8B7\",\"Name\":\"Setting\",\"Path\":\"Setting\",\"IsDirectory\":true,\"Size\":0"
+          "}"
+        "]";
+
+    char numbuf[16];
+
+    UART_SendStringBlocking(ctx->uart, "{\"src_id\":");
+    snprintf(numbuf, sizeof(numbuf), "%u", (unsigned)ctx->my_id);
+    UART_SendStringBlocking(ctx->uart, numbuf);
+    UART_SendStringBlocking(ctx->uart, ",\"tar_id\":");
+    snprintf(numbuf, sizeof(numbuf), "%u", (unsigned)req_src_id);
+    UART_SendStringBlocking(ctx->uart, numbuf);
+    UART_SendStringBlocking(ctx->uart, ",\"cmd\":\"get_files\",\"status\":\"ok\",\"payload\":");
+    UART_SendStringBlocking(ctx->uart, payload_json);
+    UART_SendStringBlocking(ctx->uart, "}\n");
 }
 
 static void HandleGetFile(JSON_Context *ctx, uint8_t req_src_id, cJSON *req_payload, bool respond) {

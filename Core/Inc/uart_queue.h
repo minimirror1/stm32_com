@@ -43,6 +43,7 @@ void UART_ConfigLED(UART_Context *ctx, GPIO_TypeDef* tx_port, uint16_t tx_pin, G
 int UART_SendByte(UART_Context *ctx, uint8_t data);
 int UART_SendArray(UART_Context *ctx, uint8_t *data, uint16_t length);
 int UART_SendString(UART_Context *ctx, char *str);
+int UART_SendStringBlocking(UART_Context *ctx, const char *str);
 
 // RX Functions
 int UART_IsRxNotEmpty(UART_Context *ctx);

@@ -408,82 +408,191 @@ CJSON_PUBLIC(cJSON *) cJSON_GetObjectItem(const cJSON * const object, const char
     return NULL;
 }
 
-CJSON_PUBLIC(char *) cJSON_PrintUnformatted(const cJSON *item) {
-    // Very basic printer for flat/nested structures
-    char *out = NULL;
-    if (!item) return NULL;
-    
-    if (item->type & cJSON_Object) {
-        size_t size = 2; // {}
-        cJSON *child = item->child;
-        while (child) {
-            char *key = child->string;
-            char *val = cJSON_PrintUnformatted(child);
-            if (val) {
-                size += strlen(key) + strlen(val) + 4; // "":,
-                free(val);
-            }
-            child = child->next;
+static size_t measure_escaped_string(const char *s) {
+    /* Returns length of JSON string including surrounding quotes. */
+    size_t n = 2; /* quotes */
+    if (s == NULL) return n;
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+        unsigned char c = *p;
+        switch (c) {
+            case '\"':
+            case '\\':
+                n += 2; /* escaped */
+                break;
+            case '\b':
+            case '\f':
+            case '\n':
+            case '\r':
+            case '\t':
+                n += 2;
+                break;
+            default:
+                if (c < 0x20) {
+                    n += 6; /* \u00XX */
+                } else {
+                    n += 1;
+                }
+                break;
         }
-        out = (char*)cJSON_malloc(size + 1);
-        if (!out) return NULL;
-        strcpy(out, "{");
-        child = item->child;
-        while (child) {
-            strcat(out, "\"");
-            strcat(out, child->string);
-            strcat(out, "\":");
-            char *val = cJSON_PrintUnformatted(child);
-            if (val) {
-                strcat(out, val);
-                free(val);
-            }
-            if (child->next) strcat(out, ",");
-            child = child->next;
-        }
-        strcat(out, "}");
-    } else if (item->type & cJSON_Array) {
-         size_t size = 2; // []
-        cJSON *child = item->child;
-        while (child) {
-            char *val = cJSON_PrintUnformatted(child);
-            if (val) {
-                size += strlen(val) + 1; // ,
-                free(val);
-            }
-            child = child->next;
-        }
-        out = (char*)cJSON_malloc(size + 1);
-        if (!out) return NULL;
-        strcpy(out, "[");
-        child = item->child;
-        while (child) {
-            char *val = cJSON_PrintUnformatted(child);
-            if (val) {
-                strcat(out, val);
-                free(val);
-            }
-            if (child->next) strcat(out, ",");
-            child = child->next;
-        }
-        strcat(out, "]");       
-    } else if (item->type & cJSON_String) {
-        size_t len = strlen(item->valuestring);
-        out = (char*)cJSON_malloc(len + 3);
-        if (out) sprintf(out, "\"%s\"", item->valuestring);
-    } else if (item->type & cJSON_Number) {
-        out = (char*)cJSON_malloc(64);
-        if (out) {
-            if (item->valuedouble == (double)item->valueint) sprintf(out, "%d", item->valueint);
-            else sprintf(out, "%f", item->valuedouble);
-        }
-    } else if (item->type & cJSON_True) {
-        out = cJSON_strdup_string("true");
-    } else if (item->type & cJSON_False) {
-        out = cJSON_strdup_string("false");
-    } else if (item->type & cJSON_NULL) {
-        out = cJSON_strdup_string("null");
     }
+    return n;
+}
+
+static int append_char(char *out, size_t out_len, size_t *idx, char c) {
+    if ((*idx + 1) >= out_len) return 0;
+    out[(*idx)++] = c;
+    return 1;
+}
+
+static int append_str(char *out, size_t out_len, size_t *idx, const char *s) {
+    if (s == NULL) return 1;
+    while (*s) {
+        if (!append_char(out, out_len, idx, *s++)) return 0;
+    }
+    return 1;
+}
+
+static int append_escaped_string(char *out, size_t out_len, size_t *idx, const char *s) {
+    if (!append_char(out, out_len, idx, '\"')) return 0;
+    if (s != NULL) {
+        for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+            unsigned char c = *p;
+            switch (c) {
+                case '\"': if (!append_str(out, out_len, idx, "\\\"")) return 0; break;
+                case '\\': if (!append_str(out, out_len, idx, "\\\\")) return 0; break;
+                case '\b': if (!append_str(out, out_len, idx, "\\b")) return 0; break;
+                case '\f': if (!append_str(out, out_len, idx, "\\f")) return 0; break;
+                case '\n': if (!append_str(out, out_len, idx, "\\n")) return 0; break;
+                case '\r': if (!append_str(out, out_len, idx, "\\r")) return 0; break;
+                case '\t': if (!append_str(out, out_len, idx, "\\t")) return 0; break;
+                default:
+                    if (c < 0x20) {
+                        char tmp[7];
+                        /* tmp: \u00XX */
+                        snprintf(tmp, sizeof(tmp), "\\u%04x", (unsigned)c);
+                        if (!append_str(out, out_len, idx, tmp)) return 0;
+                    } else {
+                        if (!append_char(out, out_len, idx, (char)c)) return 0;
+                    }
+                    break;
+            }
+        }
+    }
+    return append_char(out, out_len, idx, '\"');
+}
+
+static size_t measure_item(const cJSON *item) {
+    if (item == NULL) return 4; /* null */
+
+    if (item->type & cJSON_Object) {
+        size_t n = 2; /* {} */
+        const cJSON *child = item->child;
+        while (child) {
+            n += measure_escaped_string(child->string ? child->string : "");
+            n += 1; /* : */
+            n += measure_item(child);
+            if (child->next) n += 1; /* , */
+            child = child->next;
+        }
+        return n;
+    }
+
+    if (item->type & cJSON_Array) {
+        size_t n = 2; /* [] */
+        const cJSON *child = item->child;
+        while (child) {
+            n += measure_item(child);
+            if (child->next) n += 1; /* , */
+            child = child->next;
+        }
+        return n;
+    }
+
+    if (item->type & cJSON_String) {
+        return measure_escaped_string(item->valuestring ? item->valuestring : "");
+    }
+
+    if (item->type & cJSON_Number) {
+        char tmp[32];
+        int len;
+        if (item->valuedouble == (double)item->valueint) {
+            len = snprintf(tmp, sizeof(tmp), "%d", item->valueint);
+        } else {
+            len = snprintf(tmp, sizeof(tmp), "%.17g", item->valuedouble);
+        }
+        if (len < 0) return 1;
+        return (size_t)len;
+    }
+
+    if (item->type & cJSON_True) return 4;
+    if (item->type & cJSON_False) return 5;
+    /* cJSON_NULL and unknown -> null */
+    return 4;
+}
+
+static int write_item(const cJSON *item, char *out, size_t out_len, size_t *idx) {
+    if (item == NULL) return append_str(out, out_len, idx, "null");
+
+    if (item->type & cJSON_Object) {
+        if (!append_char(out, out_len, idx, '{')) return 0;
+        const cJSON *child = item->child;
+        while (child) {
+            if (!append_escaped_string(out, out_len, idx, child->string ? child->string : "")) return 0;
+            if (!append_char(out, out_len, idx, ':')) return 0;
+            if (!write_item(child, out, out_len, idx)) return 0;
+            if (child->next) {
+                if (!append_char(out, out_len, idx, ',')) return 0;
+            }
+            child = child->next;
+        }
+        return append_char(out, out_len, idx, '}');
+    }
+
+    if (item->type & cJSON_Array) {
+        if (!append_char(out, out_len, idx, '[')) return 0;
+        const cJSON *child = item->child;
+        while (child) {
+            if (!write_item(child, out, out_len, idx)) return 0;
+            if (child->next) {
+                if (!append_char(out, out_len, idx, ',')) return 0;
+            }
+            child = child->next;
+        }
+        return append_char(out, out_len, idx, ']');
+    }
+
+    if (item->type & cJSON_String) {
+        return append_escaped_string(out, out_len, idx, item->valuestring ? item->valuestring : "");
+    }
+
+    if (item->type & cJSON_Number) {
+        char tmp[32];
+        if (item->valuedouble == (double)item->valueint) {
+            snprintf(tmp, sizeof(tmp), "%d", item->valueint);
+        } else {
+            snprintf(tmp, sizeof(tmp), "%.17g", item->valuedouble);
+        }
+        return append_str(out, out_len, idx, tmp);
+    }
+
+    if (item->type & cJSON_True) return append_str(out, out_len, idx, "true");
+    if (item->type & cJSON_False) return append_str(out, out_len, idx, "false");
+    return append_str(out, out_len, idx, "null");
+}
+
+CJSON_PUBLIC(char *) cJSON_PrintUnformatted(const cJSON *item) {
+    if (item == NULL) return NULL;
+
+    size_t needed = measure_item(item);
+    char *out = (char *)cJSON_malloc(needed + 1);
+    if (out == NULL) return NULL;
+
+    size_t idx = 0;
+    if (!write_item(item, out, needed + 1, &idx)) {
+        cJSON_free(out);
+        return NULL;
+    }
+    out[idx] = '\0';
     return out;
 }
 

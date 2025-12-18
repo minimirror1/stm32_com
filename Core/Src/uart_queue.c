@@ -109,6 +109,23 @@ int UART_SendString(UART_Context *ctx, char *str) {
     return 0;
 }
 
+int UART_SendStringBlocking(UART_Context *ctx, const char *str) {
+    while (*str) {
+        int rc = UART_SendByte(ctx, (uint8_t)*str);
+        if (rc == 0) {
+            str++;
+            continue;
+        }
+        if (rc == -1) {
+            // Buffer full: wait until ISR drains some bytes.
+            continue;
+        }
+        // Other errors (e.g. couldn't start TX)
+        return rc;
+    }
+    return 0;
+}
+
 // --- RX Functions ---
 
 int UART_IsRxNotEmpty(UART_Context *ctx) {
