@@ -3,11 +3,17 @@
  *
  *  Created on: Dec 2, 2025
  *      Author: AI Assistant
+ *
+ *  JSON Communication Library
+ *  - Handles all JSON parsing and response formatting
+ *  - Application operations delegated to App_* functions (device_hal.h)
+ *  - App_* functions are pure application logic - no communication knowledge needed
  */
 
 #include "json_com.h"
 #include "uart_queue.h"
 #include "cJSON.h"
+#include "device_hal.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -67,15 +73,35 @@ static void SendSuccess(JSON_Context *ctx, uint8_t req_src_id, const char *resp_
 }
 
 // --- Command Handlers ---
+// All handlers call App_* functions and build responses in this layer
 
 static void HandlePing(JSON_Context *ctx, uint8_t req_src_id, bool respond) {
+    // Call pure application function
+    bool success = App_Ping();
+    
+    if (!success) {
+        SendError(ctx, req_src_id, "pong", "Not implemented", respond);
+        return;
+    }
+    
+    // Build response in communication layer
     cJSON *payload = cJSON_CreateObject();
     cJSON_AddStringToObject(payload, "message", "pong");
     SendSuccess(ctx, req_src_id, "pong", payload, respond);
 }
 
 static void HandleMove(JSON_Context *ctx, uint8_t req_src_id, cJSON *req_payload, bool respond) {
-    // Mock move
+    (void)req_payload;
+    
+    // Call pure application function
+    bool success = App_Move(ctx->my_id);
+    
+    if (!success) {
+        SendError(ctx, req_src_id, "move", "Not implemented", respond);
+        return;
+    }
+    
+    // Build response in communication layer
     cJSON *payload = cJSON_CreateObject();
     cJSON_AddStringToObject(payload, "status", "moved");
     cJSON_AddNumberToObject(payload, "deviceId", ctx->my_id);
@@ -84,8 +110,32 @@ static void HandleMove(JSON_Context *ctx, uint8_t req_src_id, cJSON *req_payload
 
 static void HandleMotionCtrl(JSON_Context *ctx, uint8_t req_src_id, cJSON *req_payload, bool respond) {
     cJSON *action_item = cJSON_GetObjectItem(req_payload, "action");
-    char *action = action_item ? action_item->valuestring : "unknown";
-
+    const char *action = action_item ? action_item->valuestring : NULL;
+    
+    if (action == NULL) {
+        SendError(ctx, req_src_id, "motion_ctrl", "Missing action", respond);
+        return;
+    }
+    
+    // Call appropriate App function based on action
+    bool success = false;
+    if (strcmp(action, "start") == 0) {
+        success = App_MotionStart(ctx->my_id);
+    } else if (strcmp(action, "stop") == 0) {
+        success = App_MotionStop(ctx->my_id);
+    } else if (strcmp(action, "pause") == 0) {
+        success = App_MotionPause(ctx->my_id);
+    } else {
+        SendError(ctx, req_src_id, "motion_ctrl", "Unknown action", respond);
+        return;
+    }
+    
+    if (!success) {
+        SendError(ctx, req_src_id, "motion_ctrl", "Not implemented", respond);
+        return;
+    }
+    
+    // Build response in communication layer
     cJSON *payload = cJSON_CreateObject();
     cJSON_AddStringToObject(payload, "status", "executed");
     cJSON_AddStringToObject(payload, "action", action);
@@ -93,170 +143,195 @@ static void HandleMotionCtrl(JSON_Context *ctx, uint8_t req_src_id, cJSON *req_p
     SendSuccess(ctx, req_src_id, "motion_ctrl", payload, respond);
 }
 
-static void HandleGetFiles(JSON_Context *ctx, uint8_t req_src_id, bool respond) {
-    // Temporary: respond with a fixed folder/file tree over communication only.
-    // (Later: replace with real SD-card listing.)
-    if (!respond) return;
+/* Icon unicode escape strings for file tree (JSON format) */
+#define ICON_FOLDER "\\uE8B7"
+#define ICON_FILE   "\\uE7C3"
 
-    static const char payload_json[] =
-        "["
-          "{"
-            "\"Children\":["
-              "{"
-                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"err_lv.ini\",\"Path\":\"Error/err_lv.ini\",\"IsDirectory\":false,\"Size\":20"
-              "},"
-              "{"
-                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"ERR_LVF.TXT\",\"Path\":\"Error/ERR_LVF.TXT\",\"IsDirectory\":false,\"Size\":28"
-              "},"
-              "{"
-                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"note.ini\",\"Path\":\"Error/note.ini\",\"IsDirectory\":false,\"Size\":18"
-              "}"
-            "],"
-            "\"Icon\":\"\\uE8B7\",\"Name\":\"Error\",\"Path\":\"Error\",\"IsDirectory\":true,\"Size\":0"
-          "},"
-          "{"
-            "\"Children\":["
-              "{"
-                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"BOOT.TXT\",\"Path\":\"Log/BOOT.TXT\",\"IsDirectory\":false,\"Size\":11"
-              "},"
-              "{"
-                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"ERROR.TXT\",\"Path\":\"Log/ERROR.TXT\",\"IsDirectory\":false,\"Size\":12"
-              "},"
-              "{"
-                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"INSP.TXT\",\"Path\":\"Log/INSP.TXT\",\"IsDirectory\":false,\"Size\":17"
-              "},"
-              "{"
-                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"SENSOR.TXT\",\"Path\":\"Log/SENSOR.TXT\",\"IsDirectory\":false,\"Size\":13"
-              "}"
-            "],"
-            "\"Icon\":\"\\uE8B7\",\"Name\":\"Log\",\"Path\":\"Log\",\"IsDirectory\":true,\"Size\":0"
-          "},"
-          "{"
-            "\"Children\":["
-              "{"
-                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_2.CSV\",\"Path\":\"Media/MT_2.CSV\",\"IsDirectory\":false,\"Size\":20"
-              "},"
-              "{"
-                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_3.CSV\",\"Path\":\"Media/MT_3.CSV\",\"IsDirectory\":false,\"Size\":20"
-              "},"
-              "{"
-                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_4.CSV\",\"Path\":\"Media/MT_4.CSV\",\"IsDirectory\":false,\"Size\":20"
-              "},"
-              "{"
-                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_5.CSV\",\"Path\":\"Media/MT_5.CSV\",\"IsDirectory\":false,\"Size\":20"
-              "},"
-              "{"
-                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_6.CSV\",\"Path\":\"Media/MT_6.CSV\",\"IsDirectory\":false,\"Size\":20"
-              "},"
-              "{"
-                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_ALL.CSV\",\"Path\":\"Media/MT_ALL.CSV\",\"IsDirectory\":false,\"Size\":20"
-              "}"
-            "],"
-            "\"Icon\":\"\\uE8B7\",\"Name\":\"Media\",\"Path\":\"Media\",\"IsDirectory\":true,\"Size\":0"
-          "},"
-          "{"
-            "\"Children\":["
-              "{"
-                "\"Children\":["
-                  "{"
-                    "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"placeholder.txt\",\"Path\":\"Midi/motor/placeholder.txt\",\"IsDirectory\":false,\"Size\":0"
-                  "}"
-                "],"
-                "\"Icon\":\"\\uE8B7\",\"Name\":\"motor\",\"Path\":\"Midi/motor\",\"IsDirectory\":true,\"Size\":0"
-              "},"
-              "{"
-                "\"Children\":["
-                  "{"
-                    "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"placeholder.txt\",\"Path\":\"Midi/page/placeholder.txt\",\"IsDirectory\":false,\"Size\":0"
-                  "}"
-                "],"
-                "\"Icon\":\"\\uE8B7\",\"Name\":\"page\",\"Path\":\"Midi/page\",\"IsDirectory\":true,\"Size\":0"
-              "}"
-            "],"
-            "\"Icon\":\"\\uE8B7\",\"Name\":\"Midi\",\"Path\":\"Midi\",\"IsDirectory\":true,\"Size\":0"
-          "},"
-          "{"
-            "\"Children\":["
-              "{"
-                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"DI_ID.TXT\",\"Path\":\"Setting/DI_ID.TXT\",\"IsDirectory\":false,\"Size\":10"
-              "},"
-              "{"
-                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_AT.TXT\",\"Path\":\"Setting/MT_AT.TXT\",\"IsDirectory\":false,\"Size\":9"
-              "},"
-              "{"
-                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_ATT.TXT\",\"Path\":\"Setting/MT_ATT.TXT\",\"IsDirectory\":false,\"Size\":9"
-              "},"
-              "{"
-                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_CT.TXT\",\"Path\":\"Setting/MT_CT.TXT\",\"IsDirectory\":false,\"Size\":9"
-              "},"
-              "{"
-                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_EL.TXT\",\"Path\":\"Setting/MT_EL.TXT\",\"IsDirectory\":false,\"Size\":9"
-              "},"
-              "{"
-                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_LI.TXT\",\"Path\":\"Setting/MT_LI.TXT\",\"IsDirectory\":false,\"Size\":9"
-              "},"
-              "{"
-                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_LK.TXT\",\"Path\":\"Setting/MT_LK.TXT\",\"IsDirectory\":false,\"Size\":9"
-              "},"
-              "{"
-                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_MD.TXT\",\"Path\":\"Setting/MT_MD.TXT\",\"IsDirectory\":false,\"Size\":9"
-              "},"
-              "{"
-                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_MS.TXT\",\"Path\":\"Setting/MT_MS.TXT\",\"IsDirectory\":false,\"Size\":9"
-              "},"
-              "{"
-                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_PL.TXT\",\"Path\":\"Setting/MT_PL.TXT\",\"IsDirectory\":false,\"Size\":9"
-              "},"
-              "{"
-                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_RP.TXT\",\"Path\":\"Setting/MT_RP.TXT\",\"IsDirectory\":false,\"Size\":10"
-              "},"
-              "{"
-                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"MT_ST.TXT\",\"Path\":\"Setting/MT_ST.TXT\",\"IsDirectory\":false,\"Size\":10"
-              "},"
-              "{"
-                "\"Children\":[],\"Icon\":\"\\uE7C3\",\"Name\":\"RE_TI.TXT\",\"Path\":\"Setting/RE_TI.TXT\",\"IsDirectory\":false,\"Size\":10"
-              "}"
-            "],"
-            "\"Icon\":\"\\uE8B7\",\"Name\":\"Setting\",\"Path\":\"Setting\",\"IsDirectory\":true,\"Size\":0"
-          "}"
-        "]";
-
+/**
+ * @brief Stream a single file item as JSON to UART
+ */
+static void StreamFileItem(JSON_Context *ctx, AppFileInfo *file, bool has_children_start) {
     char numbuf[16];
+    
+    UART_SendStringBlocking(ctx->uart, "{\"Children\":");
+    if (has_children_start) {
+        UART_SendStringBlocking(ctx->uart, "[");
+    } else {
+        UART_SendStringBlocking(ctx->uart, "[]");
+    }
+    
+    // Only close Children array if no children will follow
+    if (!has_children_start) {
+        UART_SendStringBlocking(ctx->uart, ",\"Icon\":\"");
+        UART_SendStringBlocking(ctx->uart, file->is_directory ? ICON_FOLDER : ICON_FILE);
+        UART_SendStringBlocking(ctx->uart, "\",\"Name\":\"");
+        UART_SendStringBlocking(ctx->uart, file->name);
+        UART_SendStringBlocking(ctx->uart, "\",\"Path\":\"");
+        UART_SendStringBlocking(ctx->uart, file->path);
+        UART_SendStringBlocking(ctx->uart, "\",\"IsDirectory\":");
+        UART_SendStringBlocking(ctx->uart, file->is_directory ? "true" : "false");
+        UART_SendStringBlocking(ctx->uart, ",\"Size\":");
+        snprintf(numbuf, sizeof(numbuf), "%lu", (unsigned long)file->size);
+        UART_SendStringBlocking(ctx->uart, numbuf);
+        UART_SendStringBlocking(ctx->uart, "}");
+    }
+}
 
+/**
+ * @brief Close a file item that had children
+ */
+static void StreamFileItemClose(JSON_Context *ctx, AppFileInfo *file) {
+    char numbuf[16];
+    
+    UART_SendStringBlocking(ctx->uart, "],\"Icon\":\"");
+    UART_SendStringBlocking(ctx->uart, file->is_directory ? ICON_FOLDER : ICON_FILE);
+    UART_SendStringBlocking(ctx->uart, "\",\"Name\":\"");
+    UART_SendStringBlocking(ctx->uart, file->name);
+    UART_SendStringBlocking(ctx->uart, "\",\"Path\":\"");
+    UART_SendStringBlocking(ctx->uart, file->path);
+    UART_SendStringBlocking(ctx->uart, "\",\"IsDirectory\":");
+    UART_SendStringBlocking(ctx->uart, file->is_directory ? "true" : "false");
+    UART_SendStringBlocking(ctx->uart, ",\"Size\":");
+    snprintf(numbuf, sizeof(numbuf), "%lu", (unsigned long)file->size);
+    UART_SendStringBlocking(ctx->uart, numbuf);
+    UART_SendStringBlocking(ctx->uart, "}");
+}
+
+/**
+ * @brief Check if file at index has any children
+ */
+static bool HasChildren(AppFileInfo *files, int count, int parent_idx) {
+    for (int i = parent_idx + 1; i < count; i++) {
+        if (files[i].parent_index == parent_idx) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * @brief Stream file tree recursively (memory efficient - no cJSON allocation)
+ */
+static void StreamFileTreeRecursive(JSON_Context *ctx, AppFileInfo *files, int count, int16_t parent_idx, int depth) {
+    bool first = true;
+    
+    for (int i = 0; i < count; i++) {
+        if (files[i].parent_index != parent_idx) continue;
+        
+        if (!first) {
+            UART_SendStringBlocking(ctx->uart, ",");
+        }
+        first = false;
+        
+        bool has_children = HasChildren(files, count, i);
+        
+        if (has_children) {
+            // Start item with open Children array
+            StreamFileItem(ctx, &files[i], true);
+            // Recurse for children
+            StreamFileTreeRecursive(ctx, files, count, i, depth + 1);
+            // Close item
+            StreamFileItemClose(ctx, &files[i]);
+        } else {
+            // Item with empty Children
+            StreamFileItem(ctx, &files[i], false);
+        }
+    }
+}
+
+static void HandleGetFiles(JSON_Context *ctx, uint8_t req_src_id, bool respond) {
+    if (!respond) return;
+    
+    // Static buffer for file list
+    static AppFileInfo files[APP_MAX_FILES];
+    
+    // Call pure application function - returns count or -1
+    int count = App_GetFiles(files, APP_MAX_FILES);
+    
+    if (count < 0) {
+        SendError(ctx, req_src_id, "get_files", "Not implemented", respond);
+        return;
+    }
+    
+    // Stream response directly to UART (memory efficient)
+    char numbuf[16];
+    
     UART_SendStringBlocking(ctx->uart, "{\"msg\":\"resp\",\"src_id\":");
     snprintf(numbuf, sizeof(numbuf), "%u", (unsigned)ctx->my_id);
     UART_SendStringBlocking(ctx->uart, numbuf);
     UART_SendStringBlocking(ctx->uart, ",\"tar_id\":");
     snprintf(numbuf, sizeof(numbuf), "%u", (unsigned)req_src_id);
     UART_SendStringBlocking(ctx->uart, numbuf);
-    UART_SendStringBlocking(ctx->uart, ",\"cmd\":\"get_files\",\"status\":\"ok\",\"payload\":");
-    UART_SendStringBlocking(ctx->uart, payload_json);
-    UART_SendStringBlocking(ctx->uart, "}\n");
+    UART_SendStringBlocking(ctx->uart, ",\"cmd\":\"get_files\",\"status\":\"ok\",\"payload\":[");
+    
+    // Stream file tree recursively (root items have parent_index = -1)
+    StreamFileTreeRecursive(ctx, files, count, -1, 0);
+    
+    UART_SendStringBlocking(ctx->uart, "]}\n");
 }
 
 static void HandleGetFile(JSON_Context *ctx, uint8_t req_src_id, cJSON *req_payload, bool respond) {
     cJSON *path_item = cJSON_GetObjectItem(req_payload, "path");
-    char *path = path_item ? path_item->valuestring : "";
-
-    // Mock content
+    const char *path = path_item ? path_item->valuestring : "";
+    
+    // Static buffer for file content
+    static char content_buffer[APP_CONTENT_MAX_LEN];
+    
+    // Call pure application function
+    bool success = App_GetFile(path, content_buffer, APP_CONTENT_MAX_LEN);
+    
+    if (!success) {
+        SendError(ctx, req_src_id, "get_file", "Not implemented or file not found", respond);
+        return;
+    }
+    
+    // Build response in communication layer
     cJSON *payload = cJSON_CreateObject();
     cJSON_AddStringToObject(payload, "path", path);
-    cJSON_AddStringToObject(payload, "content", "Mock content for file");
+    cJSON_AddStringToObject(payload, "content", content_buffer);
     SendSuccess(ctx, req_src_id, "get_file", payload, respond);
 }
 
 static void HandleSaveFile(JSON_Context *ctx, uint8_t req_src_id, cJSON *req_payload, bool respond) {
     cJSON *path_item = cJSON_GetObjectItem(req_payload, "path");
+    cJSON *content_item = cJSON_GetObjectItem(req_payload, "content");
+    const char *path = path_item ? path_item->valuestring : "";
+    const char *content = content_item ? content_item->valuestring : "";
     
+    // Call pure application function
+    bool success = App_SaveFile(path, content);
+    
+    if (!success) {
+        SendError(ctx, req_src_id, "save_file", "Not implemented or save failed", respond);
+        return;
+    }
+    
+    // Build response in communication layer
     cJSON *payload = cJSON_CreateObject();
     cJSON_AddStringToObject(payload, "status", "saved");
-    if (path_item) cJSON_AddStringToObject(payload, "path", path_item->valuestring);
+    cJSON_AddStringToObject(payload, "path", path);
     SendSuccess(ctx, req_src_id, "save_file", payload, respond);
 }
 
 static void HandleVerifyFile(JSON_Context *ctx, uint8_t req_src_id, cJSON *req_payload, bool respond) {
+    cJSON *path_item = cJSON_GetObjectItem(req_payload, "path");
+    cJSON *content_item = cJSON_GetObjectItem(req_payload, "content");
+    const char *path = path_item ? path_item->valuestring : "";
+    const char *content = content_item ? content_item->valuestring : "";
+    
+    bool match = false;
+    
+    // Call pure application function
+    bool success = App_VerifyFile(path, content, &match);
+    
+    if (!success) {
+        SendError(ctx, req_src_id, "verify_file", "Not implemented or file not found", respond);
+        return;
+    }
+    
+    // Build response in communication layer
     cJSON *payload = cJSON_CreateObject();
-    cJSON_AddBoolToObject(payload, "match", cJSON_True); // Always match for now
+    cJSON_AddBoolToObject(payload, "match", match);
     SendSuccess(ctx, req_src_id, "verify_file", payload, respond);
 }
 

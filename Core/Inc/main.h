@@ -118,6 +118,13 @@ void Error_Handler(void);
 
 /* USER CODE BEGIN Private defines */
 
+// Mock device mode selection
+// - 0: Real device mode (default) - uses __weak stubs, override in user_device.c
+// - 1: Mock device mode - uses simulated data for testing
+#ifndef USE_MOCK_DEVICE
+#define USE_MOCK_DEVICE 1
+#endif
+
 // RS485 multidrop addressing
 // - DEVICE_ID: this node's address (compile-time)
 // - RS485_BROADCAST_ID: broadcast address (no response by default)
