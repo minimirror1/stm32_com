@@ -40,6 +40,7 @@ static bool TryGetU8(cJSON *item, uint8_t *out) {
 static void SendError(JSON_Context *ctx, uint8_t req_src_id, const char *resp_cmd, const char *msg, bool respond) {
     if (!respond) return;
     cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "msg", "resp");
     cJSON_AddNumberToObject(root, "src_id", ctx->my_id);
     cJSON_AddNumberToObject(root, "tar_id", req_src_id);
     cJSON_AddStringToObject(root, "cmd", resp_cmd ? resp_cmd : "error");
@@ -54,6 +55,7 @@ static void SendSuccess(JSON_Context *ctx, uint8_t req_src_id, const char *resp_
         return;
     }
     cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "msg", "resp");
     cJSON_AddNumberToObject(root, "src_id", ctx->my_id);
     cJSON_AddNumberToObject(root, "tar_id", req_src_id);
     cJSON_AddStringToObject(root, "cmd", resp_cmd ? resp_cmd : "ok");
@@ -221,7 +223,7 @@ static void HandleGetFiles(JSON_Context *ctx, uint8_t req_src_id, bool respond) 
 
     char numbuf[16];
 
-    UART_SendStringBlocking(ctx->uart, "{\"src_id\":");
+    UART_SendStringBlocking(ctx->uart, "{\"msg\":\"resp\",\"src_id\":");
     snprintf(numbuf, sizeof(numbuf), "%u", (unsigned)ctx->my_id);
     UART_SendStringBlocking(ctx->uart, numbuf);
     UART_SendStringBlocking(ctx->uart, ",\"tar_id\":");
@@ -266,6 +268,7 @@ static void HandleProcessPacket(JSON_Context *ctx, const char *json_str) {
         return;
     }
 
+    cJSON *msg_item = cJSON_GetObjectItem(root, "msg");
     cJSON *cmd_item = cJSON_GetObjectItem(root, "cmd");
     cJSON *src_id_item = cJSON_GetObjectItem(root, "src_id");
     cJSON *tar_id_item = cJSON_GetObjectItem(root, "tar_id");
@@ -289,6 +292,36 @@ static void HandleProcessPacket(JSON_Context *ctx, const char *json_str) {
     uint8_t src_id = 0;
     if (!TryGetU8(src_id_item, &src_id)) {
         // Can't route response -> ignore
+        cJSON_Delete(root);
+        return;
+    }
+
+    // Message type discrimination:
+    // - "req": execute command handlers (may respond if unicast)
+    // - "resp"/"evt": ignore on device side (no handler execution)
+    // - legacy packets without "msg": treat as "req" for backwards compatibility
+    const char *msg_type = NULL;
+    bool legacy_no_msg = (msg_item == NULL);
+    if (!legacy_no_msg) {
+        if (!cJSON_IsString(msg_item) || msg_item->valuestring == NULL) {
+            SendError(ctx, src_id, "error", "Missing or invalid msg", respond);
+            cJSON_Delete(root);
+            return;
+        }
+        msg_type = msg_item->valuestring;
+    } else {
+        msg_type = "req";
+    }
+
+    if (strcmp(msg_type, "req") != 0) {
+        // Device role: ignore responses/events (host should consume these).
+        cJSON_Delete(root);
+        return;
+    }
+
+    // Requests must not include "status" to avoid ambiguity with responses.
+    if (cJSON_GetObjectItem(root, "status") != NULL) {
+        SendError(ctx, src_id, "error", "status not allowed in req", respond);
         cJSON_Delete(root);
         return;
     }
