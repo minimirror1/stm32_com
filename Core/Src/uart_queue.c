@@ -139,6 +139,12 @@ int UART_ReadByte(UART_Context *ctx, uint8_t *data) {
 
     *data = ctx->rx_buffer.buffer[ctx->rx_buffer.tail];
     ctx->rx_buffer.tail = (ctx->rx_buffer.tail + 1) % UART_BUFFER_SIZE;
+    
+    // Turn off RX LED when buffer becomes empty
+    if (ctx->enable_led && ctx->rx_buffer.head == ctx->rx_buffer.tail) {
+        HAL_GPIO_WritePin(ctx->rx_led_port, ctx->rx_led_pin, GPIO_PIN_RESET);
+    }
+    
     return 0;
 }
 
@@ -177,9 +183,9 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
     }
     // Else: Buffer overflow, drop byte
 
-    // Toggle RX LED if enabled
+    // Turn on RX LED if enabled (will be turned off when buffer is drained)
     if (ctx->enable_led) {
-        HAL_GPIO_TogglePin(ctx->rx_led_port, ctx->rx_led_pin);
+        HAL_GPIO_WritePin(ctx->rx_led_port, ctx->rx_led_pin, GPIO_PIN_SET);
     }
 
     // Restart Reception
