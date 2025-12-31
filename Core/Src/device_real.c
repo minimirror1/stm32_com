@@ -312,4 +312,117 @@ __weak bool App_VerifyFile(const char *path, const char *content, bool *out_matc
     return false;  /* Not implemented */
 }
 
+/*******************************************************************************
+ * App_GetMotors
+ *******************************************************************************
+ * @brief  Get list of all motors with full information
+ * @param  out_motors  Output array of motor info structures
+ * @param  max_count   Maximum number of motors to return
+ * @return Number of motors (>= 0) on success, -1 on failure
+ *
+ * @note   This function returns complete motor information including:
+ *         - id: Unique motor ID
+ *         - group_id, sub_id: For display as "GroupId-SubId" in GUI
+ *         - type: Motor type ("Servo", "DC", "Stepper")
+ *         - status: Current status ("Normal", "Error")
+ *         - position: Current position value
+ *         - velocity: Current velocity value
+ *
+ * @example
+ *   // In your user_app.c:
+ *   #include "device_hal.h"
+ *   #include <string.h>
+ *
+ *   int App_GetMotors(AppMotorInfo *out_motors, uint16_t max_count) {
+ *       int idx = 0;
+ *
+ *       // Motor 1: Servo in Group 1
+ *       if (idx < max_count) {
+ *           out_motors[idx].id = 1;
+ *           out_motors[idx].group_id = 1;
+ *           out_motors[idx].sub_id = 1;
+ *           strcpy(out_motors[idx].type, "Servo");
+ *           strcpy(out_motors[idx].status, "Normal");
+ *           out_motors[idx].position = 90.0f;
+ *           out_motors[idx].velocity = 0.5f;
+ *           idx++;
+ *       }
+ *
+ *       // Motor 2: DC motor in Group 1
+ *       if (idx < max_count) {
+ *           out_motors[idx].id = 2;
+ *           out_motors[idx].group_id = 1;
+ *           out_motors[idx].sub_id = 2;
+ *           strcpy(out_motors[idx].type, "DC");
+ *           strcpy(out_motors[idx].status, "Error");
+ *           out_motors[idx].position = 45.0f;
+ *           out_motors[idx].velocity = 1.0f;
+ *           idx++;
+ *       }
+ *
+ *       // Motor 3: Stepper in Group 2
+ *       if (idx < max_count) {
+ *           out_motors[idx].id = 3;
+ *           out_motors[idx].group_id = 2;
+ *           out_motors[idx].sub_id = 1;
+ *           strcpy(out_motors[idx].type, "Stepper");
+ *           strcpy(out_motors[idx].status, "Normal");
+ *           out_motors[idx].position = 0.0f;
+ *           out_motors[idx].velocity = 0.2f;
+ *           idx++;
+ *       }
+ *
+ *       return idx;
+ *   }
+ ******************************************************************************/
+__weak int App_GetMotors(AppMotorInfo *out_motors, uint16_t max_count) {
+    (void)out_motors;
+    (void)max_count;
+    return -1;  /* Not implemented */
+}
+
+/*******************************************************************************
+ * App_GetMotorState
+ *******************************************************************************
+ * @brief  Get current state of all motors (for polling)
+ * @param  out_states  Output array of motor state structures
+ * @param  max_count   Maximum number of motors to return
+ * @return Number of motors (>= 0) on success, -1 on failure
+ *
+ * @note   This function is called periodically by GUI for state updates.
+ *         Only runtime state is returned (no configuration like type/group).
+ *         - id: Motor ID (to identify which motor)
+ *         - status: Current status ("Normal", "Error")
+ *         - position: Current position value
+ *         - velocity: Current velocity value
+ *
+ * @note   You can return only a subset of motors if some haven't changed.
+ *         The GUI will merge the updates with existing state.
+ *
+ * @example
+ *   // In your user_app.c:
+ *   #include "device_hal.h"
+ *   #include <string.h>
+ *
+ *   int App_GetMotorState(AppMotorState *out_states, uint16_t max_count) {
+ *       int idx = 0;
+ *
+ *       // Get current state from hardware
+ *       for (int motor_id = 1; motor_id <= 3 && idx < max_count; motor_id++) {
+ *           out_states[idx].id = motor_id;
+ *           strcpy(out_states[idx].status, Motor_HasError(motor_id) ? "Error" : "Normal");
+ *           out_states[idx].position = Motor_GetPosition(motor_id);
+ *           out_states[idx].velocity = Motor_GetVelocity(motor_id);
+ *           idx++;
+ *       }
+ *
+ *       return idx;
+ *   }
+ ******************************************************************************/
+__weak int App_GetMotorState(AppMotorState *out_states, uint16_t max_count) {
+    (void)out_states;
+    (void)max_count;
+    return -1;  /* Not implemented */
+}
+
 #endif /* !USE_MOCK_DEVICE */

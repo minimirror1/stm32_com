@@ -481,6 +481,82 @@ static int append_escaped_string(char *out, size_t out_len, size_t *idx, const c
     return append_char(out, out_len, idx, '\"');
 }
 
+/**
+ * @brief Convert double to string without using %f/%g (STM32 newlib-nano compatible)
+ * @param value The double value to convert
+ * @param buffer Output buffer (must be at least 32 bytes)
+ * @param decimals Number of decimal places (max 4)
+ * @return Length of the resulting string
+ * 
+ * This function avoids using floating-point printf which may not work
+ * on STM32 with newlib-nano without -u _printf_float linker flag.
+ * Also avoids %lld which is not supported by newlib-nano.
+ */
+static int double_to_str(double value, char *buffer, int decimals) {
+    char *ptr = buffer;
+    
+    /* Handle negative numbers */
+    if (value < 0) {
+        *ptr++ = '-';
+        value = -value;
+    }
+    
+    /* Limit decimals to reasonable range (max 4 to fit in long) */
+    if (decimals < 0) decimals = 0;
+    if (decimals > 4) decimals = 4;
+    
+    /* Calculate multiplier for decimal places */
+    long multiplier = 1;
+    for (int i = 0; i < decimals; i++) {
+        multiplier *= 10;
+    }
+    
+    /* Round the value */
+    double rounded = value + 0.5 / (double)multiplier;
+    
+    /* Extract integer part */
+    long int_part = (long)rounded;
+    
+    /* Extract fractional part */
+    double frac = rounded - (double)int_part;
+    long frac_part = (long)(frac * (double)multiplier);
+    
+    /* Print integer part using %ld (supported by newlib-nano) */
+    int int_len = snprintf(ptr, 16, "%ld", int_part);
+    ptr += int_len;
+    
+    /* Print decimal part if needed */
+    if (decimals > 0 && frac_part > 0) {
+        *ptr++ = '.';
+        
+        /* Format with leading zeros if needed */
+        char frac_buf[8];
+        int frac_len = snprintf(frac_buf, sizeof(frac_buf), "%ld", frac_part);
+        
+        /* Add leading zeros */
+        for (int i = frac_len; i < decimals; i++) {
+            *ptr++ = '0';
+        }
+        
+        /* Copy fractional digits, removing trailing zeros */
+        int actual_len = frac_len;
+        while (actual_len > 0 && frac_buf[actual_len - 1] == '0') {
+            actual_len--;
+        }
+        for (int i = 0; i < actual_len; i++) {
+            *ptr++ = frac_buf[i];
+        }
+        
+        /* Remove decimal point if no fractional digits remain */
+        if (ptr[-1] == '.') {
+            ptr--;
+        }
+    }
+    
+    *ptr = '\0';
+    return (int)(ptr - buffer);
+}
+
 static size_t measure_item(const cJSON *item) {
     if (item == NULL) return 4; /* null */
 
@@ -514,12 +590,7 @@ static size_t measure_item(const cJSON *item) {
 
     if (item->type & cJSON_Number) {
         char tmp[32];
-        int len;
-        if (item->valuedouble == (double)item->valueint) {
-            len = snprintf(tmp, sizeof(tmp), "%d", item->valueint);
-        } else {
-            len = snprintf(tmp, sizeof(tmp), "%.17g", item->valuedouble);
-        }
+        int len = double_to_str(item->valuedouble, tmp, 4);
         if (len < 0) return 1;
         return (size_t)len;
     }
@@ -567,11 +638,7 @@ static int write_item(const cJSON *item, char *out, size_t out_len, size_t *idx)
 
     if (item->type & cJSON_Number) {
         char tmp[32];
-        if (item->valuedouble == (double)item->valueint) {
-            snprintf(tmp, sizeof(tmp), "%d", item->valueint);
-        } else {
-            snprintf(tmp, sizeof(tmp), "%.17g", item->valuedouble);
-        }
+        double_to_str(item->valuedouble, tmp, 4);
         return append_str(out, out_len, idx, tmp);
     }
 

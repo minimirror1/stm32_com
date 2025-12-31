@@ -31,6 +31,9 @@
 #define APP_CONTENT_MAX_LEN   512
 #define APP_MAX_FILES         64    /* Maximum files returned by App_GetFiles */
 #define APP_MAX_DEPTH         10    /* Maximum folder depth (0=root, 1, 2, ... 9) */
+#define APP_MAX_MOTORS        32    /* Maximum motors */
+#define APP_MOTOR_TYPE_LEN    16    /* Motor type string length */
+#define APP_MOTOR_STATUS_LEN  16    /* Motor status string length */
 
 /*******************************************************************************
  * Data Structures (Pure application data - no communication formatting)
@@ -65,6 +68,35 @@ typedef struct {
     uint8_t depth;                     /* Folder depth: 0=root, 1=subfolder, 2=sub-subfolder */
     int16_t parent_index;              /* Index of parent folder (-1 for root items) */
 } AppFileInfo;
+
+/**
+ * @brief Full motor information for get_motors command
+ * 
+ * Contains complete motor configuration and current state.
+ * Used for initial motor list loading in GUI.
+ */
+typedef struct {
+    uint8_t id;                           /* Motor unique ID */
+    uint8_t group_id;                     /* Group ID (for DisplayId = GroupId-SubId) */
+    uint8_t sub_id;                       /* Sub ID within group */
+    char type[APP_MOTOR_TYPE_LEN];        /* Type: "Servo", "DC", "Stepper" */
+    char status[APP_MOTOR_STATUS_LEN];    /* Status: "Normal", "Error" */
+    float position;                       /* Current position (e.g., 0~180 for servo) */
+    float velocity;                       /* Current velocity */
+} AppMotorInfo;
+
+/**
+ * @brief Motor state for get_motor_state command (polling)
+ * 
+ * Contains only runtime state (no configuration).
+ * Used for periodic state updates in GUI.
+ */
+typedef struct {
+    uint8_t id;                           /* Motor unique ID */
+    char status[APP_MOTOR_STATUS_LEN];    /* Status: "Normal", "Error" */
+    float position;                       /* Current position */
+    float velocity;                       /* Current velocity */
+} AppMotorState;
 
 /*******************************************************************************
  * Application Function Declarations (__weak stubs)
@@ -190,5 +222,53 @@ bool App_SaveFile(const char *path, const char *content);
  *   }
  */
 bool App_VerifyFile(const char *path, const char *content, bool *out_match);
+
+/**
+ * @brief Get list of all motors with full information
+ * @param out_motors Output array of motor info structures
+ * @param max_count Maximum number of motors to return
+ * @return Number of motors (>= 0) on success, -1 on failure
+ *
+ * @example
+ *   int App_GetMotors(AppMotorInfo *out_motors, uint16_t max_count) {
+ *       int idx = 0;
+ *       if (idx < max_count) {
+ *           out_motors[idx].id = 1;
+ *           out_motors[idx].group_id = 1;
+ *           out_motors[idx].sub_id = 1;
+ *           strcpy(out_motors[idx].type, "Servo");
+ *           strcpy(out_motors[idx].status, "Normal");
+ *           out_motors[idx].position = 90.0f;
+ *           out_motors[idx].velocity = 0.5f;
+ *           idx++;
+ *       }
+ *       return idx;
+ *   }
+ */
+int App_GetMotors(AppMotorInfo *out_motors, uint16_t max_count);
+
+/**
+ * @brief Get current state of all motors (for polling)
+ * @param out_states Output array of motor state structures
+ * @param max_count Maximum number of motors to return
+ * @return Number of motors (>= 0) on success, -1 on failure
+ *
+ * @note This function is called periodically for state updates.
+ *       Only id, status, position, and velocity are returned.
+ *
+ * @example
+ *   int App_GetMotorState(AppMotorState *out_states, uint16_t max_count) {
+ *       int idx = 0;
+ *       if (idx < max_count) {
+ *           out_states[idx].id = 1;
+ *           strcpy(out_states[idx].status, "Normal");
+ *           out_states[idx].position = Motor_GetPosition(1);
+ *           out_states[idx].velocity = Motor_GetVelocity(1);
+ *           idx++;
+ *       }
+ *       return idx;
+ *   }
+ */
+int App_GetMotorState(AppMotorState *out_states, uint16_t max_count);
 
 #endif /* INC_DEVICE_HAL_H_ */

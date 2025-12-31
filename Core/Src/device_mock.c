@@ -94,6 +94,40 @@ static const struct {
 #define MOCK_FILE_COUNT (sizeof(mock_files) / sizeof(mock_files[0]))
 
 /*******************************************************************************
+ * Mock Motor Data
+ ******************************************************************************/
+
+/**
+ * Mock motor entries matching GUI expected format.
+ * - id: Unique motor ID
+ * - group_id, sub_id: For display as "GroupId-SubId" in GUI
+ * - type: "Servo", "DC", "Stepper"
+ * - status: "Normal", "Error"
+ * - position, velocity: Initial values (will vary in App_GetMotorState)
+ */
+static const struct {
+    uint8_t id;
+    uint8_t group_id;
+    uint8_t sub_id;
+    const char *type;
+    const char *status;
+    float position;
+    float velocity;
+} mock_motors[] = {
+    /* Motor 1: Servo in Group 1-1 */
+    {1, 1, 1, "Servo", "Normal", 90.0f, 0.5f},
+    /* Motor 2: DC motor in Group 1-2, with Error status */
+    {2, 1, 2, "DC", "Error", 45.0f, 1.0f},
+    /* Motor 3: Stepper in Group 2-1 */
+    {3, 2, 1, "Stepper", "Normal", 0.0f, 0.2f},
+};
+
+#define MOCK_MOTOR_COUNT (sizeof(mock_motors) / sizeof(mock_motors[0]))
+
+/* Simple counter for simulating position/velocity changes */
+static uint32_t mock_state_counter = 0;
+
+/*******************************************************************************
  * Mock App_* Implementations
  ******************************************************************************/
 
@@ -173,6 +207,61 @@ bool App_VerifyFile(const char *path, const char *content, bool *out_match) {
     /* Mock always returns match = true */
     *out_match = true;
     return true;
+}
+
+int App_GetMotors(AppMotorInfo *out_motors, uint16_t max_count) {
+    if (out_motors == NULL) {
+        return -1;
+    }
+    
+    uint16_t count = 0;
+    for (size_t i = 0; i < MOCK_MOTOR_COUNT && count < max_count; i++) {
+        out_motors[count].id = mock_motors[i].id;
+        out_motors[count].group_id = mock_motors[i].group_id;
+        out_motors[count].sub_id = mock_motors[i].sub_id;
+        
+        strncpy(out_motors[count].type, mock_motors[i].type, APP_MOTOR_TYPE_LEN - 1);
+        out_motors[count].type[APP_MOTOR_TYPE_LEN - 1] = '\0';
+        
+        strncpy(out_motors[count].status, mock_motors[i].status, APP_MOTOR_STATUS_LEN - 1);
+        out_motors[count].status[APP_MOTOR_STATUS_LEN - 1] = '\0';
+        
+        out_motors[count].position = mock_motors[i].position;
+        out_motors[count].velocity = mock_motors[i].velocity;
+        count++;
+    }
+    
+    return (int)count;
+}
+
+int App_GetMotorState(AppMotorState *out_states, uint16_t max_count) {
+    if (out_states == NULL) {
+        return -1;
+    }
+    
+    /* Increment counter for simulating changes */
+    mock_state_counter++;
+    
+    uint16_t count = 0;
+    for (size_t i = 0; i < MOCK_MOTOR_COUNT && count < max_count; i++) {
+        out_states[count].id = mock_motors[i].id;
+        
+        strncpy(out_states[count].status, mock_motors[i].status, APP_MOTOR_STATUS_LEN - 1);
+        out_states[count].status[APP_MOTOR_STATUS_LEN - 1] = '\0';
+        
+        /* Simulate position/velocity changes with small variations */
+        /* Position oscillates around base value by +/- 5 degrees */
+        float offset = (float)((mock_state_counter + i * 7) % 11) - 5.0f;
+        out_states[count].position = mock_motors[i].position + offset;
+        
+        /* Velocity varies slightly */
+        float vel_offset = (float)((mock_state_counter + i * 3) % 5) * 0.1f;
+        out_states[count].velocity = mock_motors[i].velocity + vel_offset;
+        
+        count++;
+    }
+    
+    return (int)count;
 }
 
 #endif /* USE_MOCK_DEVICE */

@@ -335,6 +335,106 @@ static void HandleVerifyFile(JSON_Context *ctx, uint8_t req_src_id, cJSON *req_p
     SendSuccess(ctx, req_src_id, "verify_file", payload, respond);
 }
 
+static void HandleGetMotors(JSON_Context *ctx, uint8_t req_src_id, bool respond) {
+    if (!respond) return;
+    
+    // Static buffer for motor list
+    static AppMotorInfo motors[APP_MAX_MOTORS];
+    
+    // Call pure application function - returns count or -1
+    int count = App_GetMotors(motors, APP_MAX_MOTORS);
+    
+    if (count < 0) {
+        SendError(ctx, req_src_id, "get_motors", "Not implemented", respond);
+        return;
+    }
+    
+    // Build response using cJSON (motor count is typically small)
+    cJSON *payload = cJSON_CreateObject();
+    if (payload == NULL) {
+        SendError(ctx, req_src_id, "get_motors", "Memory allocation failed", respond);
+        return;
+    }
+    
+    cJSON *motors_arr = cJSON_CreateArray();
+    if (motors_arr == NULL) {
+        cJSON_Delete(payload);
+        SendError(ctx, req_src_id, "get_motors", "Memory allocation failed", respond);
+        return;
+    }
+    
+    for (int i = 0; i < count; i++) {
+        cJSON *motor = cJSON_CreateObject();
+        if (motor == NULL) {
+            cJSON_Delete(motors_arr);
+            cJSON_Delete(payload);
+            SendError(ctx, req_src_id, "get_motors", "Memory allocation failed", respond);
+            return;
+        }
+        
+        cJSON_AddNumberToObject(motor, "id", motors[i].id);
+        cJSON_AddNumberToObject(motor, "groupId", motors[i].group_id);
+        cJSON_AddNumberToObject(motor, "subId", motors[i].sub_id);
+        cJSON_AddStringToObject(motor, "type", motors[i].type);
+        cJSON_AddStringToObject(motor, "status", motors[i].status);
+        cJSON_AddNumberToObject(motor, "position", motors[i].position);
+        cJSON_AddNumberToObject(motor, "velocity", motors[i].velocity);
+        
+        cJSON_AddItemToArray(motors_arr, motor);
+    }
+    
+    cJSON_AddItemToObject(payload, "motors", motors_arr);
+    SendSuccess(ctx, req_src_id, "get_motors", payload, respond);
+}
+
+static void HandleGetMotorState(JSON_Context *ctx, uint8_t req_src_id, bool respond) {
+    if (!respond) return;
+    
+    // Static buffer for motor states
+    static AppMotorState states[APP_MAX_MOTORS];
+    
+    // Call pure application function - returns count or -1
+    int count = App_GetMotorState(states, APP_MAX_MOTORS);
+    
+    if (count < 0) {
+        SendError(ctx, req_src_id, "get_motor_state", "Not implemented", respond);
+        return;
+    }
+    
+    // Build response using cJSON (motor count is typically small)
+    cJSON *payload = cJSON_CreateObject();
+    if (payload == NULL) {
+        SendError(ctx, req_src_id, "get_motor_state", "Memory allocation failed", respond);
+        return;
+    }
+    
+    cJSON *motors_arr = cJSON_CreateArray();
+    if (motors_arr == NULL) {
+        cJSON_Delete(payload);
+        SendError(ctx, req_src_id, "get_motor_state", "Memory allocation failed", respond);
+        return;
+    }
+    
+    for (int i = 0; i < count; i++) {
+        cJSON *motor = cJSON_CreateObject();
+        if (motor == NULL) {
+            cJSON_Delete(motors_arr);
+            cJSON_Delete(payload);
+            SendError(ctx, req_src_id, "get_motor_state", "Memory allocation failed", respond);
+            return;
+        }
+        
+        cJSON_AddNumberToObject(motor, "id", states[i].id);
+        cJSON_AddNumberToObject(motor, "position", states[i].position);
+        cJSON_AddNumberToObject(motor, "velocity", states[i].velocity);
+        cJSON_AddStringToObject(motor, "status", states[i].status);
+        
+        cJSON_AddItemToArray(motors_arr, motor);
+    }
+    
+    cJSON_AddItemToObject(payload, "motors", motors_arr);
+    SendSuccess(ctx, req_src_id, "get_motor_state", payload, respond);
+}
 
 static void HandleProcessPacket(JSON_Context *ctx, const char *json_str) {
     cJSON *root = cJSON_Parse(json_str);
@@ -416,6 +516,8 @@ static void HandleProcessPacket(JSON_Context *ctx, const char *json_str) {
     else if (strcmp(cmd, "get_file") == 0) HandleGetFile(ctx, src_id, payload_item, respond);
     else if (strcmp(cmd, "save_file") == 0) HandleSaveFile(ctx, src_id, payload_item, respond);
     else if (strcmp(cmd, "verify_file") == 0) HandleVerifyFile(ctx, src_id, payload_item, respond);
+    else if (strcmp(cmd, "get_motors") == 0) HandleGetMotors(ctx, src_id, respond);
+    else if (strcmp(cmd, "get_motor_state") == 0) HandleGetMotorState(ctx, src_id, respond);
     else {
         SendError(ctx, src_id, "error", "Unknown command", respond);
     }
