@@ -52,6 +52,10 @@ PCD_HandleTypeDef hpcd_USB_FS;
 /* USER CODE BEGIN PV */
 UART_Context uart1_ctx;
 JSON_Context json1_ctx;
+
+/* Tick timer for periodic Fragment Protocol timeout handling */
+static uint32_t last_tick_time = 0;
+#define TICK_INTERVAL_MS 100  /* Call JSON_COM_Tick every 100ms */
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -116,7 +120,15 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    /* Process incoming XBee frames and Fragment Protocol */
     JSON_COM_Process(&json1_ctx);
+    
+    /* Periodic tick for Fragment Protocol timeout handling */
+    uint32_t now = HAL_GetTick();
+    if (now - last_tick_time >= TICK_INTERVAL_MS) {
+      last_tick_time = now;
+      JSON_COM_Tick(&json1_ctx);
+    }
 
   }
   /* USER CODE END 3 */

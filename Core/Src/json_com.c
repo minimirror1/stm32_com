@@ -4,10 +4,11 @@
  *  Created on: Dec 2, 2025
  *      Author: AI Assistant
  *
- *  JSON Communication Library
+ *  JSON Communication Library with XBee Fragment Protocol support
  *  - Handles all JSON parsing and response formatting
+ *  - Uses XBee API Mode 2 for RF communication
+ *  - Fragment Protocol for reliable large message transfer
  *  - Application operations delegated to App_* functions (device_hal.h)
- *  - App_* functions are pure application logic - no communication knowledge needed
  */
 
 #include "json_com.h"
@@ -19,18 +20,58 @@
 #include <stdio.h>
 #include <stdbool.h>
 
+/* ============================================================================
+ * Forward Declarations
+ * ============================================================================ */
+
+static void HandleProcessPacket(JSON_Context *ctx, const char *json_str);
+static void OnXBeeFrame(const XBeeFrame_t* frame, void* user_data);
+static void OnXBeeError(const char* error, void* user_data);
+static void OnFragRxMessage(const uint8_t* data, uint32_t len, uint64_t source_addr, void* user_data);
+static void OnFragRxLog(const char* message, void* user_data);
+static void OnFragTxComplete(uint16_t msg_id, bool success, void* user_data);
+static void OnFragTxLog(const char* message, void* user_data);
+
+/* ============================================================================
+ * Initialization
+ * ============================================================================ */
+
 void JSON_COM_Init(JSON_Context *ctx, UART_Context *uart, uint8_t my_id) {
+    memset(ctx, 0, sizeof(JSON_Context));
     ctx->uart = uart;
     ctx->my_id = my_id;
     ctx->rx_index = 0;
+    
+    /* Initialize XBee context */
+    xbee_init(&ctx->xbee, uart);
+    xbee_set_callbacks(&ctx->xbee, OnXBeeFrame, OnXBeeError, ctx);
+    
+    /* Initialize Fragment RX */
+    frag_rx_init(&ctx->frag_rx, &ctx->xbee);
+    frag_rx_set_callbacks(&ctx->frag_rx, OnFragRxMessage, OnFragRxLog, ctx);
+    
+    /* Initialize Fragment TX */
+    frag_tx_init(&ctx->frag_tx, &ctx->xbee);
+    frag_tx_set_callbacks(&ctx->frag_tx, OnFragTxComplete, OnFragTxLog, ctx);
 }
+
+/* ============================================================================
+ * Response Sending via Fragment Protocol
+ * ============================================================================ */
 
 static void SendResponse(JSON_Context *ctx, cJSON *response_json) {
     char *str = cJSON_PrintUnformatted(response_json);
     if (str) {
-        UART_SendStringBlocking(ctx->uart, str);
-        UART_SendStringBlocking(ctx->uart, "\n"); // Protocol expects newline
-        free(str); // cJSON uses malloc
+        /* Copy to TX buffer and send via Fragment Protocol */
+        uint32_t len = strlen(str);
+        if (len < JSON_TX_BUFFER_SIZE) {
+            memcpy(ctx->tx_buffer, str, len);
+            ctx->tx_buffer_len = len;
+            
+            /* Send via Fragment TX to the source address */
+            frag_tx_send(&ctx->frag_tx, ctx->tx_buffer, len, ctx->current_source_addr);
+        }
+        free(str);
     }
     cJSON_Delete(response_json);
 }
@@ -46,6 +87,7 @@ static bool TryGetU8(cJSON *item, uint8_t *out) {
 static void SendError(JSON_Context *ctx, uint8_t req_src_id, const char *resp_cmd, const char *msg, bool respond) {
     if (!respond) return;
     cJSON *root = cJSON_CreateObject();
+    if (!root) return;
     cJSON_AddStringToObject(root, "msg", "resp");
     cJSON_AddNumberToObject(root, "src_id", ctx->my_id);
     cJSON_AddNumberToObject(root, "tar_id", req_src_id);
@@ -61,6 +103,10 @@ static void SendSuccess(JSON_Context *ctx, uint8_t req_src_id, const char *resp_
         return;
     }
     cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        if (payload) cJSON_Delete(payload);
+        return;
+    }
     cJSON_AddStringToObject(root, "msg", "resp");
     cJSON_AddNumberToObject(root, "src_id", ctx->my_id);
     cJSON_AddNumberToObject(root, "tar_id", req_src_id);
@@ -72,11 +118,12 @@ static void SendSuccess(JSON_Context *ctx, uint8_t req_src_id, const char *resp_
     SendResponse(ctx, root);
 }
 
-// --- Command Handlers ---
-// All handlers call App_* functions and build responses in this layer
+/* ============================================================================
+ * Command Handlers
+ * All handlers call App_* functions and build responses in this layer
+ * ============================================================================ */
 
 static void HandlePing(JSON_Context *ctx, uint8_t req_src_id, bool respond) {
-    // Call pure application function
     bool success = App_Ping();
     
     if (!success) {
@@ -84,8 +131,8 @@ static void HandlePing(JSON_Context *ctx, uint8_t req_src_id, bool respond) {
         return;
     }
     
-    // Build response in communication layer
     cJSON *payload = cJSON_CreateObject();
+    if (!payload) return;
     cJSON_AddStringToObject(payload, "message", "pong");
     SendSuccess(ctx, req_src_id, "pong", payload, respond);
 }
@@ -93,7 +140,6 @@ static void HandlePing(JSON_Context *ctx, uint8_t req_src_id, bool respond) {
 static void HandleMove(JSON_Context *ctx, uint8_t req_src_id, cJSON *req_payload, bool respond) {
     (void)req_payload;
     
-    // Call pure application function
     bool success = App_Move(ctx->my_id);
     
     if (!success) {
@@ -101,8 +147,8 @@ static void HandleMove(JSON_Context *ctx, uint8_t req_src_id, cJSON *req_payload
         return;
     }
     
-    // Build response in communication layer
     cJSON *payload = cJSON_CreateObject();
+    if (!payload) return;
     cJSON_AddStringToObject(payload, "status", "moved");
     cJSON_AddNumberToObject(payload, "deviceId", ctx->my_id);
     SendSuccess(ctx, req_src_id, "move", payload, respond);
@@ -117,7 +163,6 @@ static void HandleMotionCtrl(JSON_Context *ctx, uint8_t req_src_id, cJSON *req_p
         return;
     }
     
-    // Call appropriate App function based on action
     bool success = false;
     if (strcmp(action, "start") == 0) {
         success = App_MotionStart(ctx->my_id);
@@ -135,149 +180,20 @@ static void HandleMotionCtrl(JSON_Context *ctx, uint8_t req_src_id, cJSON *req_p
         return;
     }
     
-    // Build response in communication layer
     cJSON *payload = cJSON_CreateObject();
+    if (!payload) return;
     cJSON_AddStringToObject(payload, "status", "executed");
     cJSON_AddStringToObject(payload, "action", action);
     cJSON_AddNumberToObject(payload, "deviceId", ctx->my_id);
     SendSuccess(ctx, req_src_id, "motion_ctrl", payload, respond);
 }
 
-/* Icon unicode escape strings for file tree (JSON format) */
-#define ICON_FOLDER "\\uE8B7"
-#define ICON_FILE   "\\uE7C3"
-
-/**
- * @brief Stream a single file item as JSON to UART
- */
-static void StreamFileItem(JSON_Context *ctx, AppFileInfo *file, bool has_children_start) {
-    char numbuf[16];
-    
-    UART_SendStringBlocking(ctx->uart, "{\"Children\":");
-    if (has_children_start) {
-        UART_SendStringBlocking(ctx->uart, "[");
-    } else {
-        UART_SendStringBlocking(ctx->uart, "[]");
-    }
-    
-    // Only close Children array if no children will follow
-    if (!has_children_start) {
-        UART_SendStringBlocking(ctx->uart, ",\"Icon\":\"");
-        UART_SendStringBlocking(ctx->uart, file->is_directory ? ICON_FOLDER : ICON_FILE);
-        UART_SendStringBlocking(ctx->uart, "\",\"Name\":\"");
-        UART_SendStringBlocking(ctx->uart, file->name);
-        UART_SendStringBlocking(ctx->uart, "\",\"Path\":\"");
-        UART_SendStringBlocking(ctx->uart, file->path);
-        UART_SendStringBlocking(ctx->uart, "\",\"IsDirectory\":");
-        UART_SendStringBlocking(ctx->uart, file->is_directory ? "true" : "false");
-        UART_SendStringBlocking(ctx->uart, ",\"Size\":");
-        snprintf(numbuf, sizeof(numbuf), "%lu", (unsigned long)file->size);
-        UART_SendStringBlocking(ctx->uart, numbuf);
-        UART_SendStringBlocking(ctx->uart, "}");
-    }
-}
-
-/**
- * @brief Close a file item that had children
- */
-static void StreamFileItemClose(JSON_Context *ctx, AppFileInfo *file) {
-    char numbuf[16];
-    
-    UART_SendStringBlocking(ctx->uart, "],\"Icon\":\"");
-    UART_SendStringBlocking(ctx->uart, file->is_directory ? ICON_FOLDER : ICON_FILE);
-    UART_SendStringBlocking(ctx->uart, "\",\"Name\":\"");
-    UART_SendStringBlocking(ctx->uart, file->name);
-    UART_SendStringBlocking(ctx->uart, "\",\"Path\":\"");
-    UART_SendStringBlocking(ctx->uart, file->path);
-    UART_SendStringBlocking(ctx->uart, "\",\"IsDirectory\":");
-    UART_SendStringBlocking(ctx->uart, file->is_directory ? "true" : "false");
-    UART_SendStringBlocking(ctx->uart, ",\"Size\":");
-    snprintf(numbuf, sizeof(numbuf), "%lu", (unsigned long)file->size);
-    UART_SendStringBlocking(ctx->uart, numbuf);
-    UART_SendStringBlocking(ctx->uart, "}");
-}
-
-/**
- * @brief Check if file at index has any children
- */
-static bool HasChildren(AppFileInfo *files, int count, int parent_idx) {
-    for (int i = parent_idx + 1; i < count; i++) {
-        if (files[i].parent_index == parent_idx) {
-            return true;
-        }
-    }
-    return false;
-}
-
-/**
- * @brief Stream file tree recursively (memory efficient - no cJSON allocation)
- */
-static void StreamFileTreeRecursive(JSON_Context *ctx, AppFileInfo *files, int count, int16_t parent_idx, int depth) {
-    bool first = true;
-    
-    for (int i = 0; i < count; i++) {
-        if (files[i].parent_index != parent_idx) continue;
-        
-        if (!first) {
-            UART_SendStringBlocking(ctx->uart, ",");
-        }
-        first = false;
-        
-        bool has_children = HasChildren(files, count, i);
-        
-        if (has_children) {
-            // Start item with open Children array
-            StreamFileItem(ctx, &files[i], true);
-            // Recurse for children
-            StreamFileTreeRecursive(ctx, files, count, i, depth + 1);
-            // Close item
-            StreamFileItemClose(ctx, &files[i]);
-        } else {
-            // Item with empty Children
-            StreamFileItem(ctx, &files[i], false);
-        }
-    }
-}
-
-static void HandleGetFiles(JSON_Context *ctx, uint8_t req_src_id, bool respond) {
-    if (!respond) return;
-    
-    // Static buffer for file list
-    static AppFileInfo files[APP_MAX_FILES];
-    
-    // Call pure application function - returns count or -1
-    int count = App_GetFiles(files, APP_MAX_FILES);
-    
-    if (count < 0) {
-        SendError(ctx, req_src_id, "get_files", "Not implemented", respond);
-        return;
-    }
-    
-    // Stream response directly to UART (memory efficient)
-    char numbuf[16];
-    
-    UART_SendStringBlocking(ctx->uart, "{\"msg\":\"resp\",\"src_id\":");
-    snprintf(numbuf, sizeof(numbuf), "%u", (unsigned)ctx->my_id);
-    UART_SendStringBlocking(ctx->uart, numbuf);
-    UART_SendStringBlocking(ctx->uart, ",\"tar_id\":");
-    snprintf(numbuf, sizeof(numbuf), "%u", (unsigned)req_src_id);
-    UART_SendStringBlocking(ctx->uart, numbuf);
-    UART_SendStringBlocking(ctx->uart, ",\"cmd\":\"get_files\",\"status\":\"ok\",\"payload\":[");
-    
-    // Stream file tree recursively (root items have parent_index = -1)
-    StreamFileTreeRecursive(ctx, files, count, -1, 0);
-    
-    UART_SendStringBlocking(ctx->uart, "]}\n");
-}
-
 static void HandleGetFile(JSON_Context *ctx, uint8_t req_src_id, cJSON *req_payload, bool respond) {
     cJSON *path_item = cJSON_GetObjectItem(req_payload, "path");
     const char *path = path_item ? path_item->valuestring : "";
     
-    // Static buffer for file content
     static char content_buffer[APP_CONTENT_MAX_LEN];
     
-    // Call pure application function
     bool success = App_GetFile(path, content_buffer, APP_CONTENT_MAX_LEN);
     
     if (!success) {
@@ -285,8 +201,8 @@ static void HandleGetFile(JSON_Context *ctx, uint8_t req_src_id, cJSON *req_payl
         return;
     }
     
-    // Build response in communication layer
     cJSON *payload = cJSON_CreateObject();
+    if (!payload) return;
     cJSON_AddStringToObject(payload, "path", path);
     cJSON_AddStringToObject(payload, "content", content_buffer);
     SendSuccess(ctx, req_src_id, "get_file", payload, respond);
@@ -298,7 +214,6 @@ static void HandleSaveFile(JSON_Context *ctx, uint8_t req_src_id, cJSON *req_pay
     const char *path = path_item ? path_item->valuestring : "";
     const char *content = content_item ? content_item->valuestring : "";
     
-    // Call pure application function
     bool success = App_SaveFile(path, content);
     
     if (!success) {
@@ -306,8 +221,8 @@ static void HandleSaveFile(JSON_Context *ctx, uint8_t req_src_id, cJSON *req_pay
         return;
     }
     
-    // Build response in communication layer
     cJSON *payload = cJSON_CreateObject();
+    if (!payload) return;
     cJSON_AddStringToObject(payload, "status", "saved");
     cJSON_AddStringToObject(payload, "path", path);
     SendSuccess(ctx, req_src_id, "save_file", payload, respond);
@@ -320,8 +235,6 @@ static void HandleVerifyFile(JSON_Context *ctx, uint8_t req_src_id, cJSON *req_p
     const char *content = content_item ? content_item->valuestring : "";
     
     bool match = false;
-    
-    // Call pure application function
     bool success = App_VerifyFile(path, content, &match);
     
     if (!success) {
@@ -329,19 +242,63 @@ static void HandleVerifyFile(JSON_Context *ctx, uint8_t req_src_id, cJSON *req_p
         return;
     }
     
-    // Build response in communication layer
     cJSON *payload = cJSON_CreateObject();
+    if (!payload) return;
     cJSON_AddBoolToObject(payload, "match", match);
     SendSuccess(ctx, req_src_id, "verify_file", payload, respond);
+}
+
+static void HandleGetFiles(JSON_Context *ctx, uint8_t req_src_id, bool respond) {
+    if (!respond) return;
+    
+    static AppFileInfo files[APP_MAX_FILES];
+    
+    int count = App_GetFiles(files, APP_MAX_FILES);
+    
+    if (count < 0) {
+        SendError(ctx, req_src_id, "get_files", "Not implemented", respond);
+        return;
+    }
+    
+    /* Build JSON response using cJSON (since we now use Fragment Protocol for large messages) */
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return;
+    
+    cJSON_AddStringToObject(root, "msg", "resp");
+    cJSON_AddNumberToObject(root, "src_id", ctx->my_id);
+    cJSON_AddNumberToObject(root, "tar_id", req_src_id);
+    cJSON_AddStringToObject(root, "cmd", "get_files");
+    cJSON_AddStringToObject(root, "status", "ok");
+    
+    cJSON *files_arr = cJSON_CreateArray();
+    if (!files_arr) {
+        cJSON_Delete(root);
+        return;
+    }
+    
+    for (int i = 0; i < count; i++) {
+        cJSON *file_obj = cJSON_CreateObject();
+        if (!file_obj) continue;
+        
+        cJSON_AddStringToObject(file_obj, "name", files[i].name);
+        cJSON_AddStringToObject(file_obj, "path", files[i].path);
+        cJSON_AddBoolToObject(file_obj, "isDirectory", files[i].is_directory);
+        cJSON_AddNumberToObject(file_obj, "size", files[i].size);
+        cJSON_AddNumberToObject(file_obj, "depth", files[i].depth);
+        cJSON_AddNumberToObject(file_obj, "parentIndex", files[i].parent_index);
+        
+        cJSON_AddItemToArray(files_arr, file_obj);
+    }
+    
+    cJSON_AddItemToObject(root, "payload", files_arr);
+    SendResponse(ctx, root);
 }
 
 static void HandleGetMotors(JSON_Context *ctx, uint8_t req_src_id, bool respond) {
     if (!respond) return;
     
-    // Static buffer for motor list
     static AppMotorInfo motors[APP_MAX_MOTORS];
     
-    // Call pure application function - returns count or -1
     int count = App_GetMotors(motors, APP_MAX_MOTORS);
     
     if (count < 0) {
@@ -349,28 +306,18 @@ static void HandleGetMotors(JSON_Context *ctx, uint8_t req_src_id, bool respond)
         return;
     }
     
-    // Build response using cJSON (motor count is typically small)
     cJSON *payload = cJSON_CreateObject();
-    if (payload == NULL) {
-        SendError(ctx, req_src_id, "get_motors", "Memory allocation failed", respond);
-        return;
-    }
+    if (!payload) return;
     
     cJSON *motors_arr = cJSON_CreateArray();
-    if (motors_arr == NULL) {
+    if (!motors_arr) {
         cJSON_Delete(payload);
-        SendError(ctx, req_src_id, "get_motors", "Memory allocation failed", respond);
         return;
     }
     
     for (int i = 0; i < count; i++) {
         cJSON *motor = cJSON_CreateObject();
-        if (motor == NULL) {
-            cJSON_Delete(motors_arr);
-            cJSON_Delete(payload);
-            SendError(ctx, req_src_id, "get_motors", "Memory allocation failed", respond);
-            return;
-        }
+        if (!motor) continue;
         
         cJSON_AddNumberToObject(motor, "id", motors[i].id);
         cJSON_AddNumberToObject(motor, "groupId", motors[i].group_id);
@@ -390,10 +337,8 @@ static void HandleGetMotors(JSON_Context *ctx, uint8_t req_src_id, bool respond)
 static void HandleGetMotorState(JSON_Context *ctx, uint8_t req_src_id, bool respond) {
     if (!respond) return;
     
-    // Static buffer for motor states
     static AppMotorState states[APP_MAX_MOTORS];
     
-    // Call pure application function - returns count or -1
     int count = App_GetMotorState(states, APP_MAX_MOTORS);
     
     if (count < 0) {
@@ -401,28 +346,18 @@ static void HandleGetMotorState(JSON_Context *ctx, uint8_t req_src_id, bool resp
         return;
     }
     
-    // Build response using cJSON (motor count is typically small)
     cJSON *payload = cJSON_CreateObject();
-    if (payload == NULL) {
-        SendError(ctx, req_src_id, "get_motor_state", "Memory allocation failed", respond);
-        return;
-    }
+    if (!payload) return;
     
     cJSON *motors_arr = cJSON_CreateArray();
-    if (motors_arr == NULL) {
+    if (!motors_arr) {
         cJSON_Delete(payload);
-        SendError(ctx, req_src_id, "get_motor_state", "Memory allocation failed", respond);
         return;
     }
     
     for (int i = 0; i < count; i++) {
         cJSON *motor = cJSON_CreateObject();
-        if (motor == NULL) {
-            cJSON_Delete(motors_arr);
-            cJSON_Delete(payload);
-            SendError(ctx, req_src_id, "get_motor_state", "Memory allocation failed", respond);
-            return;
-        }
+        if (!motor) continue;
         
         cJSON_AddNumberToObject(motor, "id", states[i].id);
         cJSON_AddNumberToObject(motor, "position", states[i].position);
@@ -436,10 +371,13 @@ static void HandleGetMotorState(JSON_Context *ctx, uint8_t req_src_id, bool resp
     SendSuccess(ctx, req_src_id, "get_motor_state", payload, respond);
 }
 
+/* ============================================================================
+ * Packet Processing
+ * ============================================================================ */
+
 static void HandleProcessPacket(JSON_Context *ctx, const char *json_str) {
     cJSON *root = cJSON_Parse(json_str);
     if (!root) {
-        // No addressing info available -> ignore silently on RS485 multidrop
         return;
     }
 
@@ -451,30 +389,23 @@ static void HandleProcessPacket(JSON_Context *ctx, const char *json_str) {
 
     uint8_t tar_id = 0;
     if (!TryGetU8(tar_id_item, &tar_id)) {
-        // Not a valid addressed packet -> ignore
         cJSON_Delete(root);
         return;
     }
 
     if (tar_id != ctx->my_id && tar_id != RS485_BROADCAST_ID) {
-        // Not for me -> ignore
         cJSON_Delete(root);
         return;
     }
 
-    bool respond = (tar_id == ctx->my_id); // broadcast -> no response (avoid collisions)
+    bool respond = (tar_id == ctx->my_id);
 
     uint8_t src_id = 0;
     if (!TryGetU8(src_id_item, &src_id)) {
-        // Can't route response -> ignore
         cJSON_Delete(root);
         return;
     }
 
-    // Message type discrimination:
-    // - "req": execute command handlers (may respond if unicast)
-    // - "resp"/"evt": ignore on device side (no handler execution)
-    // - legacy packets without "msg": treat as "req" for backwards compatibility
     const char *msg_type = NULL;
     bool legacy_no_msg = (msg_item == NULL);
     if (!legacy_no_msg) {
@@ -489,12 +420,10 @@ static void HandleProcessPacket(JSON_Context *ctx, const char *json_str) {
     }
 
     if (strcmp(msg_type, "req") != 0) {
-        // Device role: ignore responses/events (host should consume these).
         cJSON_Delete(root);
         return;
     }
 
-    // Requests must not include "status" to avoid ambiguity with responses.
     if (cJSON_GetObjectItem(root, "status") != NULL) {
         SendError(ctx, src_id, "error", "status not allowed in req", respond);
         cJSON_Delete(root);
@@ -525,24 +454,138 @@ static void HandleProcessPacket(JSON_Context *ctx, const char *json_str) {
     cJSON_Delete(root);
 }
 
-void JSON_COM_Process(JSON_Context *ctx) {
-    uint8_t byte;
-    // Process all available bytes
-    while (UART_ReadByte(ctx->uart, &byte) == 0) {
-        if (byte == '\n' || byte == '\r') {
-            if (ctx->rx_index > 0) {
-                ctx->rx_line_buffer[ctx->rx_index] = '\0';
-                HandleProcessPacket(ctx, ctx->rx_line_buffer);
-                ctx->rx_index = 0;
-            }
-        } else {
-            if (ctx->rx_index < MAX_JSON_LEN - 1) {
-                ctx->rx_line_buffer[ctx->rx_index++] = (char)byte;
+/* ============================================================================
+ * XBee Callbacks
+ * ============================================================================ */
+
+static void OnXBeeFrame(const XBeeFrame_t* frame, void* user_data) {
+    JSON_Context* ctx = (JSON_Context*)user_data;
+    
+    /* Handle RX Packet (0x90) and Explicit RX (0x91) */
+    if (frame->frame_type == XBEE_FRAME_RX_PACKET) {
+        const XBeeRxPacket_t* rx = &frame->parsed.rx_packet;
+        
+        if (rx->rf_data && rx->rf_data_len > 0) {
+            /* Check if this is a NACK or DONE for TX */
+            if (frag_rx_is_nack(rx->rf_data, rx->rf_data_len)) {
+                NackMessage_t nack;
+                if (frag_rx_parse_nack(rx->rf_data, rx->rf_data_len, &nack)) {
+                    frag_tx_handle_nack(&ctx->frag_tx, &nack, rx->source_addr64);
+                }
+            } else if (frag_rx_is_done(rx->rf_data, rx->rf_data_len)) {
+                uint16_t msg_id;
+                if (frag_rx_parse_done(rx->rf_data, rx->rf_data_len, &msg_id)) {
+                    frag_tx_handle_done(&ctx->frag_tx, msg_id);
+                }
             } else {
-                // Buffer overflow, reset
-                ctx->rx_index = 0; 
-                // No addressing information here -> ignore silently on RS485 multidrop
+                /* Process as Fragment Protocol data */
+                frag_rx_process(&ctx->frag_rx, rx->rf_data, rx->rf_data_len, rx->source_addr64);
+            }
+        }
+    } else if (frame->frame_type == XBEE_FRAME_EXPLICIT_RX) {
+        const XBeeExplicitRx_t* rx = &frame->parsed.explicit_rx;
+        
+        if (rx->rf_data && rx->rf_data_len > 0) {
+            /* Same handling as RX Packet */
+            if (frag_rx_is_nack(rx->rf_data, rx->rf_data_len)) {
+                NackMessage_t nack;
+                if (frag_rx_parse_nack(rx->rf_data, rx->rf_data_len, &nack)) {
+                    frag_tx_handle_nack(&ctx->frag_tx, &nack, rx->source_addr64);
+                }
+            } else if (frag_rx_is_done(rx->rf_data, rx->rf_data_len)) {
+                uint16_t msg_id;
+                if (frag_rx_parse_done(rx->rf_data, rx->rf_data_len, &msg_id)) {
+                    frag_tx_handle_done(&ctx->frag_tx, msg_id);
+                }
+            } else {
+                frag_rx_process(&ctx->frag_rx, rx->rf_data, rx->rf_data_len, rx->source_addr64);
             }
         }
     }
+    /* TX Status (0x8B) could be handled here for retry logic if needed */
+}
+
+static void OnXBeeError(const char* error, void* user_data) {
+    (void)user_data;
+    (void)error;
+    /* Could log errors here if needed */
+}
+
+/* ============================================================================
+ * Fragment RX Callbacks
+ * ============================================================================ */
+
+static void OnFragRxMessage(const uint8_t* data, uint32_t len, uint64_t source_addr, void* user_data) {
+    JSON_Context* ctx = (JSON_Context*)user_data;
+    
+    /* Store source address for response */
+    ctx->current_source_addr = source_addr;
+    
+    /* Ensure null-termination and process as JSON */
+    if (len < MAX_JSON_LEN) {
+        memcpy(ctx->rx_line_buffer, data, len);
+        ctx->rx_line_buffer[len] = '\0';
+        HandleProcessPacket(ctx, ctx->rx_line_buffer);
+    }
+}
+
+static void OnFragRxLog(const char* message, void* user_data) {
+    (void)user_data;
+    (void)message;
+    /* Could log messages here if needed */
+}
+
+/* ============================================================================
+ * Fragment TX Callbacks
+ * ============================================================================ */
+
+static void OnFragTxComplete(uint16_t msg_id, bool success, void* user_data) {
+    (void)user_data;
+    (void)msg_id;
+    (void)success;
+    /* Could track completion status here if needed */
+}
+
+static void OnFragTxLog(const char* message, void* user_data) {
+    (void)user_data;
+    (void)message;
+    /* Could log messages here if needed */
+}
+
+/* ============================================================================
+ * Main Processing Functions
+ * ============================================================================ */
+
+void JSON_COM_Process(JSON_Context *ctx) {
+    /* Process incoming XBee frames from UART */
+    xbee_process(&ctx->xbee);
+    
+    /* Run TX state machine (sends pending fragments) */
+    frag_tx_tick(&ctx->frag_tx);
+}
+
+void JSON_COM_Tick(JSON_Context *ctx) {
+    /* Periodic timeout handling for Fragment Protocol */
+    frag_rx_tick(&ctx->frag_rx);
+    frag_tx_tick(&ctx->frag_tx);
+}
+
+void JSON_COM_SetDestAddress(JSON_Context *ctx, uint64_t addr64) {
+    ctx->current_source_addr = addr64;
+}
+
+uint16_t JSON_COM_SendString(JSON_Context *ctx, const char *json_str, uint64_t dest_addr64) {
+    uint32_t len = strlen(json_str);
+    if (len >= JSON_TX_BUFFER_SIZE) {
+        return 0;
+    }
+    
+    memcpy(ctx->tx_buffer, json_str, len);
+    ctx->tx_buffer_len = len;
+    
+    return frag_tx_send(&ctx->frag_tx, ctx->tx_buffer, len, dest_addr64);
+}
+
+bool JSON_COM_IsTxBusy(JSON_Context *ctx) {
+    return frag_tx_is_busy(&ctx->frag_tx);
 }
