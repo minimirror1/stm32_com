@@ -1,0 +1,3 @@
+[submodule "Lib/stm32_json_com"]
+	path = Lib/stm32_json_com
+	url = https://github.com/minimirror1/stm32_json_com.git
