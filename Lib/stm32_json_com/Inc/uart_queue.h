@@ -3,12 +3,31 @@
  *
  *  Created on: Dec 1, 2025
  *      Author: AI Assistant
+ *
+ *  STM32 UART Queue Library
+ *  Supports: STM32F3, STM32F4, STM32F7, STM32H7 series
  */
 
 #ifndef INC_UART_QUEUE_H_
 #define INC_UART_QUEUE_H_
 
-#include "main.h"
+/* STM32 HAL Auto-detection */
+#if defined(STM32F3)
+    #include "stm32f3xx_hal.h"
+#elif defined(STM32F4)
+    #include "stm32f4xx_hal.h"
+#elif defined(STM32F7)
+    #include "stm32f7xx_hal.h"
+#elif defined(STM32H7)
+    #include "stm32h7xx_hal.h"
+#elif defined(STM32G4)
+    #include "stm32g4xx_hal.h"
+#elif defined(STM32L4)
+    #include "stm32l4xx_hal.h"
+#else
+    #error "Unsupported STM32 series. Define STM32F3, STM32F4, STM32F7, STM32H7, STM32G4, or STM32L4"
+#endif
+
 #include <stdbool.h>
 
 #define UART_BUFFER_SIZE 2048U
