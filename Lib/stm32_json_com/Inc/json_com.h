@@ -18,6 +18,9 @@
 
 #define MAX_JSON_LEN 1024
 
+/** @brief Broadcast address - message will be received by all devices */
+#define RS485_BROADCAST_ID 0xFF
+
 /**
  * JSON packet protocol (Fragment Protocol over XBee DigiMesh)
  *
