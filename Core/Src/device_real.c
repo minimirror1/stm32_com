@@ -54,36 +54,38 @@ __weak bool App_Ping(void) {
  * App_Move
  *******************************************************************************
  * @brief  Execute move command
- * @param  device_id  Target device ID
+ * @param  motor_id  Target motor ID
+ * @param  raw_pos   Target raw position value
  * @return true on success, false on failure
  *
  * @example
  *   // In your user_app.c:
- *   bool App_Move(uint8_t device_id) {
- *       Motor_MoveToPosition(device_id, 100);
+ *   bool App_Move(uint8_t motor_id, int32_t raw_pos) {
+ *       Motor_MoveToRawPosition(motor_id, raw_pos);
  *       return true;
  *   }
  ******************************************************************************/
-__weak bool App_Move(uint8_t device_id) {
-    (void)device_id;
+__weak bool App_Move(uint8_t motor_id, int32_t raw_pos) {
+    (void)motor_id;
+    (void)raw_pos;
     return false;  /* Not implemented */
 }
 
 /*******************************************************************************
- * App_MotionStart
+ * App_MotionPlay
  *******************************************************************************
- * @brief  Start motion sequence
+ * @brief  Play motion sequence
  * @param  device_id  Target device ID
  * @return true on success, false on failure
  *
  * @example
  *   // In your user_app.c:
- *   bool App_MotionStart(uint8_t device_id) {
+ *   bool App_MotionPlay(uint8_t device_id) {
  *       Motion_Start(device_id);
  *       return true;
  *   }
  ******************************************************************************/
-__weak bool App_MotionStart(uint8_t device_id) {
+__weak bool App_MotionPlay(uint8_t device_id) {
     (void)device_id;
     return false;  /* Not implemented */
 }
@@ -325,8 +327,10 @@ __weak bool App_VerifyFile(const char *path, const char *content, bool *out_matc
  *         - group_id, sub_id: For display as "GroupId-SubId" in GUI
  *         - type: Motor type ("Servo", "DC", "Stepper")
  *         - status: Current status ("Normal", "Error")
- *         - position: Current position value
+ *         - position: Current raw position value
  *         - velocity: Current velocity value
+ *         - min_angle/max_angle: Display angle range for GUI conversion
+ *         - min_raw/max_raw: Raw position range for GUI conversion
  *
  * @example
  *   // In your user_app.c:
@@ -343,8 +347,12 @@ __weak bool App_VerifyFile(const char *path, const char *content, bool *out_matc
  *           out_motors[idx].sub_id = 1;
  *           strcpy(out_motors[idx].type, "Servo");
  *           strcpy(out_motors[idx].status, "Normal");
- *           out_motors[idx].position = 90.0f;
+ *           out_motors[idx].position = 2048;
  *           out_motors[idx].velocity = 0.5f;
+ *           out_motors[idx].min_angle = 0.0f;
+ *           out_motors[idx].max_angle = 180.0f;
+ *           out_motors[idx].min_raw = 0;
+ *           out_motors[idx].max_raw = 3072;
  *           idx++;
  *       }
  *
@@ -355,8 +363,12 @@ __weak bool App_VerifyFile(const char *path, const char *content, bool *out_matc
  *           out_motors[idx].sub_id = 2;
  *           strcpy(out_motors[idx].type, "DC");
  *           strcpy(out_motors[idx].status, "Error");
- *           out_motors[idx].position = 45.0f;
+ *           out_motors[idx].position = 1536;
  *           out_motors[idx].velocity = 1.0f;
+ *           out_motors[idx].min_angle = -90.0f;
+ *           out_motors[idx].max_angle = 90.0f;
+ *           out_motors[idx].min_raw = 0;
+ *           out_motors[idx].max_raw = 4095;
  *           idx++;
  *       }
  *
@@ -367,8 +379,12 @@ __weak bool App_VerifyFile(const char *path, const char *content, bool *out_matc
  *           out_motors[idx].sub_id = 1;
  *           strcpy(out_motors[idx].type, "Stepper");
  *           strcpy(out_motors[idx].status, "Normal");
- *           out_motors[idx].position = 0.0f;
+ *           out_motors[idx].position = 1024;
  *           out_motors[idx].velocity = 0.2f;
+ *           out_motors[idx].min_angle = 0.0f;
+ *           out_motors[idx].max_angle = 360.0f;
+ *           out_motors[idx].min_raw = 0;
+ *           out_motors[idx].max_raw = 4095;
  *           idx++;
  *       }
  *
@@ -393,7 +409,7 @@ __weak int App_GetMotors(AppMotorInfo *out_motors, uint16_t max_count) {
  *         Only runtime state is returned (no configuration like type/group).
  *         - id: Motor ID (to identify which motor)
  *         - status: Current status ("Normal", "Error")
- *         - position: Current position value
+ *         - position: Current raw position value
  *         - velocity: Current velocity value
  *
  * @note   You can return only a subset of motors if some haven't changed.
@@ -411,7 +427,7 @@ __weak int App_GetMotors(AppMotorInfo *out_motors, uint16_t max_count) {
  *       for (int motor_id = 1; motor_id <= 3 && idx < max_count; motor_id++) {
  *           out_states[idx].id = motor_id;
  *           strcpy(out_states[idx].status, Motor_HasError(motor_id) ? "Error" : "Normal");
- *           out_states[idx].position = Motor_GetPosition(motor_id);
+ *           out_states[idx].position = Motor_GetRawPosition(motor_id);
  *           out_states[idx].velocity = Motor_GetVelocity(motor_id);
  *           idx++;
  *       }

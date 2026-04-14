@@ -103,23 +103,29 @@ static const struct {
  * - group_id, sub_id: For display as "GroupId-SubId" in GUI
  * - type: "Servo", "DC", "Stepper"
  * - status: "Normal", "Error"
- * - position, velocity: Initial values (will vary in App_GetMotorState)
+ * - position: Raw position value
+ * - min/max angle/raw: Conversion metadata for GUI
+ * - velocity: Initial values (will vary in App_GetMotorState)
  */
-static const struct {
+static struct {
     uint8_t id;
     uint8_t group_id;
     uint8_t sub_id;
     const char *type;
     const char *status;
-    float position;
+    int32_t position;
     float velocity;
+    float min_angle;
+    float max_angle;
+    int32_t min_raw;
+    int32_t max_raw;
 } mock_motors[] = {
     /* Motor 1: Servo in Group 1-1 */
-    {1, 1, 1, "Servo", "Normal", 90.0f, 0.5f},
+    {1, 1, 1, "Servo", "Normal", 2048, 0.5f, 0.0f, 180.0f, 0, 3072},
     /* Motor 2: DC motor in Group 1-2, with Error status */
-    {2, 1, 2, "DC", "Error", 45.0f, 1.0f},
+    {2, 1, 2, "DC", "Error", 1536, 1.0f, -90.0f, 90.0f, 0, 4095},
     /* Motor 3: Stepper in Group 2-1 */
-    {3, 2, 1, "Stepper", "Normal", 0.0f, 0.2f},
+    {3, 2, 1, "Stepper", "Normal", 1024, 0.2f, 0.0f, 360.0f, 0, 4095},
 };
 
 #define MOCK_MOTOR_COUNT (sizeof(mock_motors) / sizeof(mock_motors[0]))
@@ -135,12 +141,24 @@ bool App_Ping(void) {
     return true;  /* Mock always succeeds */
 }
 
-bool App_Move(uint8_t device_id) {
-    (void)device_id;
-    return true;  /* Mock always succeeds */
+bool App_Move(uint8_t motor_id, int32_t raw_pos) {
+    for (size_t i = 0; i < MOCK_MOTOR_COUNT; i++) {
+        if (mock_motors[i].id != motor_id) {
+            continue;
+        }
+
+        if (raw_pos < mock_motors[i].min_raw || raw_pos > mock_motors[i].max_raw) {
+            return false;
+        }
+
+        mock_motors[i].position = raw_pos;
+        return true;
+    }
+
+    return false;
 }
 
-bool App_MotionStart(uint8_t device_id) {
+bool App_MotionPlay(uint8_t device_id) {
     (void)device_id;
     return true;  /* Mock always succeeds */
 }
@@ -228,6 +246,10 @@ int App_GetMotors(AppMotorInfo *out_motors, uint16_t max_count) {
         
         out_motors[count].position = mock_motors[i].position;
         out_motors[count].velocity = mock_motors[i].velocity;
+        out_motors[count].min_angle = mock_motors[i].min_angle;
+        out_motors[count].max_angle = mock_motors[i].max_angle;
+        out_motors[count].min_raw = mock_motors[i].min_raw;
+        out_motors[count].max_raw = mock_motors[i].max_raw;
         count++;
     }
     
@@ -249,10 +271,17 @@ int App_GetMotorState(AppMotorState *out_states, uint16_t max_count) {
         strncpy(out_states[count].status, mock_motors[i].status, APP_MOTOR_STATUS_LEN - 1);
         out_states[count].status[APP_MOTOR_STATUS_LEN - 1] = '\0';
         
-        /* Simulate position/velocity changes with small variations */
-        /* Position oscillates around base value by +/- 5 degrees */
-        float offset = (float)((mock_state_counter + i * 7) % 11) - 5.0f;
-        out_states[count].position = mock_motors[i].position + offset;
+        /* Simulate raw position changes with small bounded variations. */
+        int32_t offset = (int32_t)((mock_state_counter + i * 7U) % 11U) - 5;
+        int32_t next_position = mock_motors[i].position + offset;
+
+        if (next_position < mock_motors[i].min_raw) {
+            next_position = mock_motors[i].min_raw;
+        } else if (next_position > mock_motors[i].max_raw) {
+            next_position = mock_motors[i].max_raw;
+        }
+
+        out_states[count].position = next_position;
         
         /* Velocity varies slightly */
         float vel_offset = (float)((mock_state_counter + i * 3) % 5) * 0.1f;
